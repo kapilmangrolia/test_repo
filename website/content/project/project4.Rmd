@@ -1,0 +1,217 @@
+---
+title: "ConocoPhillips Rod Pump Failure Dashboard"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: columns
+    vertical_layout: fill
+---
+
+```{r setup, include=FALSE}
+library(flexdashboard)
+library(DT)
+library(plotly)
+library(tidyverse)
+library(htmlwidgets)
+```
+
+```{r,include=FALSE}
+rodPump <-read.csv(file='rodpump_failure.csv', header=T, na.strings=c("","NA")) %>%
+  as.data.frame
+
+rodPump <-rodPump %>% select("Rod_ID"=roduid,
+    "Lifetime_Start"=lifetime_start,
+    "Lifetime_End"=lifetime_end,
+  "Failure_Type"=FAILURETYPE,
+    "Primary_Setpoint"=PrimarySetpoint ,
+    "Secondary_Setpoint"=SecondarySetpoint,
+    "Stroke_Length"=StrokeLength,
+    "Gross_StrokeLength"=GrossStrokeLength,
+    "Pump_Fillage"=Fillage,
+    "Yesterdays_Avg_SPM"=YesterdaysAverageSPM,
+    "BHA_Configuration"=bha_configuration,
+    "Max_Unguided_DLS"=max_unguided_dls,
+    "DLS_High_in_Hole"=dls_high_in_hole,
+    "Gas_Anchor_Length"=gas_anchor_length,
+    "Max_Inclination"=MAX_INCLINATION,
+    "Wellbore_category"=wellbore_category,
+    "Packer_vs_Tac"=packer_vs_tac,
+    "Avg_Pressure_Flowline"=AVG_PRESS_FLOWLINE,
+    "Avg_Pressure_Tubing"=AVG_PRESSURE_TUBING,
+    "Avg_Pressure_Casing"=AVG_PRESSURE_CASING,
+    "Avg_Differential_Pressure"=AVG_DIFFERENTIAL_PRESSURE,
+    "Avg_Oil_Volume"=AVG_OIL_VOLUME,
+    "Avg_Water_Volume"=AVG_WATER_VOLUME,
+    "Avg_Water_SG"=AVG_WATERSG,
+    "Rod_Sinker_Type"=rod_sinker_type,
+    "Rod_Make"=rod_make,
+    "Route"=ROUTE,
+    "Overall_Max_Sideload"=overall_max_sideload,
+    "Shallow_max_Sideload"=shallow_max_sideload,
+    "Max_Unguided_DLS"=max_unguided_dls,
+    "De_Sand_Company"=DESANDDEGAS_TYP,
+    "Nipple_Set_Depth"=NIPPLE_SET_DEPTH,
+    "Pump_Bore"=pump_bore) 
+
+rodPump <- rodPump %>% na.omit() %>% distinct() %>% filter_all(is.finite)
+
+rodPump %>% 
+  mutate(Lifetime_Start=as.POSIXct(Lifetime_Start),Lifetime_End=as.POSIXct(Lifetime_End),
+         lifespan=Lifetime_End-Lifetime_Start,Lifespan_Days=as.numeric(lifespan)) %>% select(-Lifetime_Start,-Lifetime_End,-lifespan) %>% mutate(Pump_Bore = as.numeric(as.character(Pump_Bore))) %>% filter_all(is.finite) -> rodPump
+
+```
+
+
+```{r,include=FALSE}
+
+library(cluster)
+
+rodPumpScale <- rodPump %>% mutate_if(is.numeric, scale)
+
+dat1<-rodPump%>%mutate_if(is.character,as.factor)%>%column_to_rownames("Rod_ID")%>%
+  select(-Failure_Type)
+
+gower1<-daisy(dat1,metric="gower") 
+
+sil_width5<-vector()
+
+for(i in 2:15){  
+  pam_fit5 <- pam(gower1, diss = TRUE, k = i)  
+  sil_width5[i] <- pam_fit5$silinfo$avg.width  
+}
+
+pam10 <- pam(gower1, k = 3, diss = T)
+
+pamclust5 <- dat1 %>% mutate(cluster=as.factor(pam10$clustering))
+
+pamclust5 %>% mutate_all(as.numeric) -> pamclust5
+
+library(GGally)
+
+```
+
+
+```{r,include=FALSE}
+
+PCA_dat <- rodPump %>% select(-Rod_ID,-Failure_Type,-BHA_Configuration,-Wellbore_category,-Packer_vs_Tac,-Rod_Sinker_Type,-Rod_Make,-De_Sand_Company)
+
+Rodnums <- PCA_dat %>%  mutate(Pump_Bore = as.numeric(as.character(Pump_Bore))) %>% mutate_if(is.numeric, scale) %>% filter_all(is.finite)
+
+
+rownames(PCA_dat) <- Rodnums$Rod_ID
+PCA <- princomp(Rodnums)  
+
+Rod_PC <- rodPump %>%
+  mutate(PC1=PCA$scores[, 1], PC2=PCA$scores[, 2],PC3=PCA$scores[, 3],
+         PC4=PCA$scores[, 4],PC5=PCA$scores[, 5],PC6=PCA$scores[, 6],
+         PC7=PCA$scores[, 7],PC8=PCA$scores[, 8]) %>% mutate(Cluster=pamclust5$cluster) 
+
+library(factoextra)
+
+empty_list = list()
+k= 1
+for (i in 1:8){
+  for(j in 2:8){
+    if (i < j){
+       
+      empty_list[[k]] = fviz_pca_biplot(PCA,
+          axes=c(i,j),
+          addEllipses = T,
+          ellipse.level=0.95,
+          habillage = as.factor(Rod_PC$Failure_Type),
+          label="var",
+          col.var="black",
+          labelsize=3,
+          pointsize=1,
+          ggtheme = theme_minimal(),
+          legend.title="Failure Type") + coord_fixed() + ggtitle("PCA - Biplot") + 
+        theme(plot.title = element_text(hjust = 0.5),legend.position = "bottom")  
+      k=k+1
+      }
+}
+}
+
+```
+
+```{r,include=FALSE}
+
+library(nnet)
+
+data1 <- rodPump %>% 
+  mutate(y=ifelse(Failure_Type=="Sucker Rod Pump",0,ifelse(Failure_Type=="Rods",1,2))) %>%
+  select(-Rod_ID,-Failure_Type,-Rod_Make,-`De_Sand_Company`)
+
+multi <- multinom(y~.,data=data1)
+
+data2 <- data1
+
+data2$logit <- predict(multi)
+
+data2 %>% mutate(Failure_Type=ifelse(y==0,"Sucker Rod Pump",
+                                     ifelse(y==1,"Rods","Tubing"))) -> data2
+
+#get predicted log-odds (logits)
+
+data2 %>% 
+  mutate(outcome=factor(Failure_Type,levels=c("Sucker Rod Pump","Rods","Tubing"))) -> data2
+
+```
+
+
+#Machine Learning Results
+
+### PCA 2 x PCA 1
+
+```{r,warning=FALSE}
+ggplotly(empty_list[[1]]) %>% layout(legend = list(orientation = "h", x = 0.2, y = -0.2))
+```
+
+### PCA 4 x PCA 1
+
+```{r,warning=FALSE}
+ggplotly(empty_list[[3]]) %>% layout(legend = list(orientation = "h", x = 0.2, y = -0.2))
+```
+
+### PCA 8 x PCA 2
+
+```{r,warning=FALSE}
+ggplotly(empty_list[[13]]) %>% layout(legend = list(orientation = "h", x = 0.2, y = -0.2))
+```
+
+### Multinomial Logistical Regression: Density Plot 
+
+```{r,warning=FALSE}
+ggplotly(ggplot(data2, aes(logit, fill=outcome))+geom_density(alpha=.3,) +
+  geom_vline(xintercept=0,lty=2))
+```
+
+# PAM Clustering
+
+### PAM Cluster: 2 x 2 
+
+```{r,warning=FALSE}
+ggplotly(ggpairs(pamclust5,columns=1:2 ,aes(color=as.factor(rodPumpScale$Failure_Type))))
+```
+
+### 3 x 3
+
+```{r,warning=FALSE}
+
+ggplotly(ggpairs(pamclust5,columns=1:3 ,aes(color=as.factor(rodPumpScale$Failure_Type))))
+         
+```
+
+### 4 x 4
+
+```{r,warning=FALSE}
+
+ggplotly(ggpairs(pamclust5,columns=1:4 ,aes(color=as.factor(rodPumpScale$Failure_Type))))
+         
+```
+
+### 5 x 5
+
+```{r,warning=FALSE}
+
+ggplotly(ggpairs(pamclust5,columns=1:5 ,aes(color=as.factor(rodPumpScale$Failure_Type))))
+     
+```

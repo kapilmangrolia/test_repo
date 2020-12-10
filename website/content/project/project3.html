@@ -1,0 +1,843 @@
+---
+title: 'Rod Pump Failure Data Analysis'
+author: "NSC325 - Fall 2020"
+date: "December 09, 2020"
+output:
+  html_document:
+    toc: yes
+    toc_float:
+      collapsed: no
+      smooth_scroll: yes
+  pdf_document:
+    toc: no
+---
+
+
+
+<p>Kapil Mangrolia<br />
+EID: kvm386</p>
+<div id="introduction" class="section level1">
+<h1>Introduction</h1>
+<p>The dataset represents the rod pump failure in pumpjack systems. The dataset is from ConocoPhillips. It has various columns for characteristics of rod pumps and how they possibly failed such as sideload, inclination, start/end time, failure type, etc. The purpose of this project is to attempt to find hidden patterns on how/where the rod pumps are failing and then present the results. The first step in the analysis process is to clean the dataset.</p>
+</div>
+<div id="data-cleaning" class="section level1">
+<h1>Data Cleaning</h1>
+<p>Step #1: Open the dataset and load relevent packages</p>
+<pre class="r"><code>library(tidyverse)
+library(cluster)
+library(psych)
+library(GGally)
+library(factoextra)
+library(nnet)
+library(glmnet)</code></pre>
+<pre class="r"><code>rodPump &lt;- read.csv(file = &quot;rodpump_failure.csv&quot;, header = T, 
+    na.strings = c(&quot;&quot;, &quot;NA&quot;)) %&gt;% as.data.frame</code></pre>
+<p>Step #2: Remove and rename unwanted columns</p>
+<p>What is an unwanted column? I define an unwanted column as a column filled with many 0's, empty values, or has anonymized data.</p>
+<pre class="r"><code>glimpse(rodPump)</code></pre>
+<pre><code>## Rows: 2,596
+## Columns: 32
+## $ Rod_ID                    &lt;fct&gt; GB27GKBE51029074693667, GB53OEVX46438297645…
+## $ Lifetime_Start            &lt;fct&gt; 2014-05-02 00:00:00.000, 2018-01-28 14:00:0…
+## $ Lifetime_End              &lt;fct&gt; 2019-01-04 10:00:00.000, 2019-05-17 12:00:0…
+## $ Failure_Type              &lt;fct&gt; Tubing, Tubing, Sucker Rod Pump, Sucker Rod…
+## $ Primary_Setpoint          &lt;dbl&gt; 75, 80, 75, 75, 80, 75, 75, 75, 80, 75, 75,…
+## $ Secondary_Setpoint        &lt;dbl&gt; 60, 62, 60, 60, 65, 60, 60, 60, 65, 60, 60,…
+## $ Stroke_Length             &lt;dbl&gt; 144.0000, 168.0000, 144.0000, 144.2000, 168…
+## $ Gross_StrokeLength        &lt;dbl&gt; 108.1356, 173.4624, NA, NA, 127.2285, NA, N…
+## $ Pump_Fillage              &lt;dbl&gt; 91.41016, 2.50000, NA, 86.32777, 61.00000, …
+## $ Yesterdays_Avg_SPM        &lt;dbl&gt; 6.000000, 0.000000, NA, 5.800000, 4.272727,…
+## $ BHA_Configuration         &lt;fct&gt; TAC_ABOVE_NIP, TAC_BELOW_NIP, PACKER_DONNAN…
+## $ Max_Unguided_DLS          &lt;dbl&gt; 1.710783, 1.830000, 5.470000, 1.928766, 1.8…
+## $ DLS_High_in_Hole          &lt;dbl&gt; 1.3964860, 1.6500000, 5.4700000, 0.4879464,…
+## $ Gas_Anchor_Length         &lt;dbl&gt; 19.27, 17.21, 20.75, 17.25, 17.12, 20.75, 1…
+## $ Max_Inclination           &lt;dbl&gt; 2.43, 2.30, 2.10, 1.47, 4.23, 2.10, 1.30, 1…
+## $ Wellbore_category         &lt;fct&gt; Vertical, Vertical, Vertical, Vertical, Low…
+## $ Packer_vs_Tac             &lt;fct&gt; OTHER_ANCHOR, OTHER_ANCHOR, arrowset, OTHER…
+## $ Avg_Pressure_Flowline     &lt;dbl&gt; 60.05264, 53.56084, NA, NA, 61.24920, NA, N…
+## $ Avg_Pressure_Tubing       &lt;dbl&gt; 74.29322, 76.70415, 73.51731, 71.95545, 75.…
+## $ Avg_Pressure_Casing       &lt;dbl&gt; 52.78275, 88.33195, 55.55450, 101.80941, 12…
+## $ Avg_Differential_Pressure &lt;dbl&gt; -21.495727, 11.836617, -17.962807, 29.85396…
+## $ Avg_Oil_Volume            &lt;dbl&gt; 50.70783, 91.19827, 46.18824, 84.82917, 77.…
+## $ Avg_Water_Volume          &lt;dbl&gt; 58.618097, 17.359578, 10.288743, 28.054167,…
+## $ Avg_Water_SG              &lt;dbl&gt; 1.040000, NA, NA, 1.040000, 1.040000, NA, 1…
+## $ Rod_Sinker_Type           &lt;fct&gt; SINKER_BARS_W_GUIDED_SUBS, SINKER_BARS_W_GU…
+## $ Rod_Make                  &lt;fct&gt; strategize next-generation users, mesh ente…
+## $ Route                     &lt;int&gt; 900, 882, 880, 875, 875, 884, 883, 873, 884…
+## $ Overall_Max_Sideload      &lt;dbl&gt; NA, 179.44, 105.76, 98.18, 266.68, NA, 84.9…
+## $ Shallow_max_Sideload      &lt;dbl&gt; NA, 179.44, 105.76, 47.96, 266.68, NA, 84.9…
+## $ De_Sand_Company           &lt;fct&gt; UNKNOWN, Miller LLC, Miller LLC, Miller LLC…
+## $ Nipple_Set_Depth          &lt;dbl&gt; 10024.8, 10235.6, 10401.9, 9557.7, 9681.7, …
+## $ Pump_Bore                 &lt;fct&gt; 1.5, 1.5, 1.5, 1.75, 1.75, 1.25, 1.75, 1.5,…</code></pre>
+<p>Step 3: Remove NA, missing values, and duplicates</p>
+<pre class="r"><code>rodPump &lt;- rodPump %&gt;% na.omit() %&gt;% distinct() %&gt;% filter_all(is.finite)</code></pre>
+<p>The dataset is has been cleaned. However,the &quot;Lifetime_Start&quot; and &quot;Lifetime_End&quot; aren't &quot;tidy&quot; and should be seperated into day,month,year, and time. Once those are tidy, we can subtract the &quot;Lifetime_Start&quot; from the &quot;Lifetime_End&quot; to get the &quot;Lifespan&quot; of the rod pump. I also convert the &quot;Pump Bore&quot; to a numeric column to avoid problems later on. Onto some simple summary statistics and plots.</p>
+<pre class="r"><code>rodPump &lt;- rodPump %&gt;% mutate(Lifetime_Start = as.POSIXct(Lifetime_Start), 
+    Lifetime_End = as.POSIXct(Lifetime_End), lifespan = Lifetime_End - 
+        Lifetime_Start, Lifespan_Days = as.numeric(lifespan)) %&gt;% 
+    select(-Lifetime_Start, -Lifetime_End, -lifespan) %&gt;% mutate(Pump_Bore = as.numeric(as.character(Pump_Bore))) %&gt;% 
+    filter_all(is.finite)</code></pre>
+</div>
+<div id="eda-summary-statistics" class="section level1">
+<h1>EDA: Summary Statistics</h1>
+<p>Step 4: Organize data into seperate dataframes based on failure type</p>
+<pre class="r"><code>tubing &lt;- rodPump %&gt;% filter(Failure_Type == &quot;Tubing&quot;)
+rods &lt;- rodPump %&gt;% filter(Failure_Type == &quot;Rods&quot;)
+sucker_rod_pump &lt;- rodPump %&gt;% filter(Failure_Type == &quot;Sucker Rod Pump&quot;)</code></pre>
+<p>Step 5: Summary statistics for each dataframe</p>
+<pre class="r"><code>library(psych)
+descriptives_tubing &lt;- describeBy(x = tubing)
+descriptives_rods &lt;- describeBy(x = rods)
+descriptives_sucker_rod_pump &lt;- describeBy(x = sucker_rod_pump)</code></pre>
+<div id="tubing-failure-summary-statistics" class="section level5">
+<h5>Tubing Failure Summary Statistics</h5>
+<pre><code>##                    vars   n    mean     sd  median trimmed     mad   min
+## Rod_ID*               1 272 1268.50 784.69 1275.00 1264.80 1050.42  2.00
+## Failure_Type*         2 272    3.00   0.00    3.00    3.00    0.00  3.00
+## Primary_Setpoint      3 272   74.20   8.62   75.00   75.47    0.00  0.00
+## Secondary_Setpoint    4 272   58.08  14.27   60.00   61.13    0.00  0.00
+## Stroke_Length         5 272  152.88  13.10  144.04  152.11    0.06 94.14
+## Gross_StrokeLength    6 272  133.74  24.81  133.65  134.55   20.99  0.00
+## Pump_Fillage          7 272   81.62  19.29   85.40   85.34   11.96  0.00
+##                        max   range  skew kurtosis    se
+## Rod_ID*            2584.00 2582.00 -0.01    -1.30 47.58
+## Failure_Type*         3.00    0.00   NaN      NaN  0.00
+## Primary_Setpoint     85.00   85.00 -5.83    42.16  0.52
+## Secondary_Setpoint   70.00   70.00 -3.68    12.16  0.87
+## Stroke_Length       216.12  121.98  0.45     1.55  0.79
+## Gross_StrokeLength  211.29  211.29 -1.20     6.13  1.50
+## Pump_Fillage         99.80   99.80 -2.60     7.68  1.17
+##  [ reached &#39;max&#39; / getOption(&quot;max.print&quot;) -- omitted 24 rows ]</code></pre>
+</div>
+<div id="rod-failure-summary-statistics" class="section level5">
+<h5>Rod Failure Summary Statistics</h5>
+<pre><code>##                    vars  n    mean     sd  median trimmed    mad    min     max
+## Rod_ID*               1 87 1295.13 760.41 1323.00 1285.20 953.31   1.00 2594.00
+## Failure_Type*         2 87    1.00   0.00    1.00    1.00   0.00   1.00    1.00
+## Primary_Setpoint      3 87   76.34   3.36   75.00   76.15   0.00  65.00   90.00
+## Secondary_Setpoint    4 87   57.91  13.22   60.00   60.63   0.00   0.00   70.00
+## Stroke_Length         5 87  151.53  11.40  144.04  150.35   0.06 144.00  169.82
+## Gross_StrokeLength    6 87  123.26  24.30  121.00  121.32  16.03  75.46  244.00
+## Pump_Fillage          7 87   82.59  20.63   89.12   86.57  10.23   0.10   99.89
+##                      range  skew kurtosis    se
+## Rod_ID*            2593.00  0.08    -1.25 81.52
+## Failure_Type*         0.00   NaN      NaN  0.00
+## Primary_Setpoint     25.00  0.76     3.45  0.36
+## Secondary_Setpoint   70.00 -3.83    13.97  1.42
+## Stroke_Length        25.82  0.86    -1.26  1.22
+## Gross_StrokeLength  168.54  1.65     6.01  2.61
+## Pump_Fillage         99.79 -2.78     8.22  2.21
+##  [ reached &#39;max&#39; / getOption(&quot;max.print&quot;) -- omitted 24 rows ]</code></pre>
+</div>
+<div id="sucker-rod-pump-failure-summary-statistics" class="section level5">
+<h5>Sucker Rod Pump Failure Summary Statistics</h5>
+<pre><code>##                    vars   n    mean     sd  median trimmed     mad    min
+## Rod_ID*               1 121 1280.44 796.61 1266.00 1276.63 1003.72   3.00
+## Failure_Type*         2 121    2.00   0.00    2.00    2.00    0.00   2.00
+## Primary_Setpoint      3 121   72.80   7.75   75.00   74.32    0.00  50.00
+## Secondary_Setpoint    4 121   53.72  22.54   60.00   58.04    0.00   0.00
+## Stroke_Length         5 121  149.22  14.38  144.04  148.73    0.06 112.00
+## Gross_StrokeLength    6 121  128.87  26.97  128.43  129.64   25.42  26.35
+## Pump_Fillage          7 121   79.10  21.96   83.12   83.16   17.57   0.00
+##                        max   range  skew kurtosis    se
+## Rod_ID*            2577.00 2574.00  0.09    -1.27 72.42
+## Failure_Type*         2.00    0.00   NaN      NaN  0.00
+## Primary_Setpoint     90.00   40.00 -1.82     3.16  0.70
+## Secondary_Setpoint  100.00  100.00 -1.71     1.81  2.05
+## Stroke_Length       216.12  104.12  0.72     3.31  1.31
+## Gross_StrokeLength  212.77  186.42 -0.54     2.61  2.45
+## Pump_Fillage         99.90   99.90 -1.94     4.08  2.00
+##  [ reached &#39;max&#39; / getOption(&quot;max.print&quot;) -- omitted 24 rows ]</code></pre>
+</div>
+<div id="eda-exploratory-plots" class="section level3">
+<h3>EDA: Exploratory Plots</h3>
+<p>Just to take a peak at the data, here are some histograms of Pump Fillage for each failure type, filled by the wellbourne type.</p>
+<pre class="r"><code>ggplot(tubing, aes(Pump_Fillage, fill = Wellbore_category)) + 
+    geom_histogram(bins = 60) + theme(plot.title = element_text(hjust = 0.5)) + 
+    ggtitle(&quot;Tubing Pump Fillage Histogram&quot;)</code></pre>
+<p><img src="/project/project3_files/figure-html/unnamed-chunk-12-1.png" width="672" style="display: block; margin: auto;" /></p>
+<pre class="r"><code>ggplot(rods, aes(Pump_Fillage)) + geom_histogram(bins = 60) + 
+    theme(plot.title = element_text(hjust = 0.5)) + ggtitle(&quot;Rod Pump Fillage Histogram&quot;)</code></pre>
+<p><img src="/project/project3_files/figure-html/unnamed-chunk-12-2.png" width="672" style="display: block; margin: auto;" /></p>
+<pre class="r"><code>ggplot(sucker_rod_pump, aes(Pump_Fillage)) + geom_histogram(bins = 60) + 
+    theme(plot.title = element_text(hjust = 0.5)) + ggtitle(&quot;Sucker Rod Pump Fillage Histogram&quot;)</code></pre>
+<p><img src="/project/project3_files/figure-html/unnamed-chunk-12-3.png" width="672" style="display: block; margin: auto;" /></p>
+<pre class="r"><code>ggplot(rodPump, aes(x = seq(1, length(Lifespan_Days)), y = Lifespan_Days)) + 
+    geom_point(aes(color = Failure_Type)) + theme(plot.title = element_text(hjust = 0.5)) + 
+    ggtitle(&quot;Lifespan of Rod Pump Systems&quot;)</code></pre>
+<p><img src="/project/project3_files/figure-html/unnamed-chunk-12-4.png" width="672" style="display: block; margin: auto;" /></p>
+</div>
+</div>
+<div id="correlation-heat-map" class="section level1">
+<h1>Correlation Heat Map</h1>
+<p>Here is a correlation heat map of all variables. Notice how red variables mean there is high correlation while blue variables mean a low correlation. There aren't many noticeable high correlations, which isn't neccessairly a bad thing. This indicates that the variables are different from each other and there could be hidden patterns. However, there is a very high correlation between the max sideload and the shallow sideload. There is also a 70% correlation between oil volume and water volume. Also, in the corners, there are small clusters of slighlty red variables. These correlations will be useful in the PCA analysis.</p>
+<pre class="r"><code>cormat &lt;- rodPump %&gt;% select_if(is.numeric) %&gt;% cor(use=&quot;pair&quot;) %&gt;% as.data.frame
+
+cormat %&gt;% rownames_to_column(&quot;var1&quot;) %&gt;% pivot_longer(-1,&#39;var2&#39;, values_to = &quot;Correlation&quot;) %&gt;% ggplot(aes(var1,var2,fill=Correlation))+geom_tile() +
+  scale_fill_gradient2(low=&quot;white&quot;,mid=&quot;blue&quot;,high=&quot;red&quot;) +#makes colors!
+  geom_text(aes(label=round(Correlation,2)),color = &quot;black&quot;, size = 1.7) + #overlays correlation values
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) + #flips the x-axis labels
+  coord_fixed() +ggtitle(&quot;Correlation Heat Map&quot;)+ theme(plot.title = element_text(hjust = 0.5),axis.text.x=element_text(angle=45,hjust=1)) + xlab(&quot;&quot;) +
+  ylab(&quot;&quot;)</code></pre>
+<p><img src="/project/project3_files/figure-html/unnamed-chunk-13-1.png" width="672" style="display: block; margin: auto;" /></p>
+</div>
+<div id="machine-learning-clustering-methods-pam" class="section level1">
+<h1>Machine Learning: Clustering Methods: PAM</h1>
+<p>&quot;Partition Around Medoids&quot;, also known as PAM, is an unsupervised clustering method that is similar to Kmeans but handles outliers in a more efficient and robust way. Similar to kmeans, PAM determines clusters based on the distance between the centers of each cluster and the distance within each cluster. Ideally, we want well defined clusters. Well defined clusters are have large distance between each other but a small distance from the center within each cluster. PAM clustering will be performed to the entire dataset. We will attempt to see if the unsupervised clustering method will cluster by failure on its own. To begin, the dataset must be scaled/normailzed, which means to be converted to z-scores.</p>
+<pre class="r"><code>library(cluster)
+rodPumpScale &lt;- rodPump %&gt;% mutate_if(is.numeric, scale)</code></pre>
+<p>Now, I will use PAM clustering to attempt to find trends in the data. How do I know the ideal number of clusters? I will find the silhouette width of the scaled numerical data, which will give the ideal number of clusters for the scaled dataset.</p>
+<pre class="r"><code>pam_dat4 &lt;- rodPumpScale %&gt;% select(-Rod_ID, -Failure_Type, -BHA_Configuration, 
+    -Wellbore_category, -Packer_vs_Tac, -Rod_Sinker_Type, -Rod_Make, 
+    De_Sand_Company)
+
+
+sil_width4 &lt;- vector()
+
+for (i in 2:15) {
+    pam_fit4 &lt;- pam(pam_dat4, k = i)
+    sil_width4[i] &lt;- pam_fit4$silinfo$avg.width
+}
+
+ggplot() + geom_line(aes(x = 1:15, y = sil_width4)) + scale_x_continuous(name = &quot;k&quot;, 
+    breaks = 1:15) + ggtitle(&quot;Silhouette Width by Number of Clusters&quot;) + 
+    theme(plot.title = element_text(hjust = 0.5))</code></pre>
+<p><img src="/project/project3_files/figure-html/unnamed-chunk-15-1.png" width="672" style="display: block; margin: auto;" /></p>
+<p>By the plot above, it seems that 3 clusters should be chosen for this data because the highest point in the plot is at k = 3. Now, PAM clustering can be performed and the results can be plotted.</p>
+<pre class="r"><code>pam_3 &lt;- pam_dat4 %&gt;% pam(3)  #perform PAM
+
+## ggplot that
+pamclust4 &lt;- pam_dat4 %&gt;% mutate(cluster = as.factor(pam_3$clustering))
+
+pamclust4 %&gt;% ggplot(aes(Primary_Setpoint, Secondary_Setpoint, 
+    color = cluster)) + geom_point() + ggtitle(&quot;PAM Clustering Plot&quot;) + 
+    theme(plot.title = element_text(hjust = 0.5))</code></pre>
+<p><img src="/project/project3_files/figure-html/unnamed-chunk-16-1.png" width="672" style="display: block; margin: auto;" /></p>
+<p>The plot above is a result of PAM clustering. The plot clusters Primary SetPoint and Secondary Setpoint. It seems that there isn't a large distance between the clusters and there isn't small distance within the clusters either. As a result, this data cluster doesn't have much to offer. However, I want to see all possible clusters! If I want to see all possible cluster combinations as plots, I can use ggpairs().With ggpairs(), I can color the points by Failure_Type and see if the unsupervised machine learning model was able to group them on its own .</p>
+<pre class="r"><code>library(GGally)
+pamclust4 &lt;- pamclust4 %&gt;% mutate_all(as.numeric)
+ggpairs(pamclust4, columns = 1:4, aes(color = as.factor(rodPumpScale$Failure_Type)))</code></pre>
+<p><img src="/project/project3_files/figure-html/unnamed-chunk-17-1.png" width="672" style="display: block; margin: auto;" /></p>
+<pre class="r"><code>pam_3$silinfo$avg.width</code></pre>
+<pre><code>## [1] 0.1246829</code></pre>
+<p>The average silhouette width is 0.125. According to the goodness of fit criteria, this means &quot;no substantial structure has been found&quot;. This means that with PAM clustering method, there probably isn't a hidden pattern or group within the data. However, this isn't necessairly a bad thing! Does this indicate that the individual means of each column are different from each other? Possibly, but are they statistically different and significant from each other? We can determine that by using ANOVA and hypothesis test simulations. There is one thing we are forgetting. We didn't use the categorical variables in the PAM clustering. Usually clustering methods only allow numerics, but using what's known as the &quot;Gower Dissimilarity&quot;. The Gower allows you to be able to tell how similar the categorical variables are to each other and to the numerical variables. PAM clustering with the Gower dissimilarity follows the same algorithm: scale numerical values, find the amount of clusters with the silloutte width, perform PAM and notice trends with an entire matrix of plots with ggpairs().</p>
+</div>
+<div id="clustering-methods-pam-with-gower" class="section level1">
+<h1>Clustering Methods: PAM with Gower</h1>
+<pre class="r"><code>dat1 &lt;- rodPump %&gt;% mutate_if(is.character, as.factor) %&gt;% column_to_rownames(&quot;Rod_ID&quot;) %&gt;% 
+    select(-Failure_Type)
+
+gower1 &lt;- daisy(dat1, metric = &quot;gower&quot;)
+
+sil_width5 &lt;- vector()
+
+for (i in 2:15) {
+    pam_fit5 &lt;- pam(gower1, diss = TRUE, k = i)
+    sil_width5[i] &lt;- pam_fit5$silinfo$avg.width
+}</code></pre>
+<p><img src="/project/project3_files/figure-html/unnamed-chunk-20-1.png" width="672" style="display: block; margin: auto;" /></p>
+<p>By the plot above, it seems that 3 clusters should be chosen for this data because the highest point in the plot is at k = 3. Now, PAM clustering can be performed and the results can be plotted.</p>
+<pre class="r"><code>pam10 &lt;- pam(gower1, k = 3, diss = T)  #tell pam you are using dissimilarities</code></pre>
+<p>The Gower can tell you statistics with categoricals such as the following, &quot;Which 2 rod pumps are the most 'similar' and 'different' according to the Gower?&quot; It uses euclidean distance between and within groups.</p>
+<pre class="r"><code>gower1 %&gt;% as.matrix %&gt;% as.data.frame %&gt;% rownames_to_column %&gt;% 
+    pivot_longer(-1, values_to = &quot;distance&quot;) %&gt;% filter(rowname != 
+    name) %&gt;% filter(distance %in% c(min(distance), max(distance))) %&gt;% 
+    distinct(distance, .keep_all = T)</code></pre>
+<pre><code>## # A tibble: 2 x 3
+##   rowname                name                   distance
+##   &lt;chr&gt;                  &lt;chr&gt;                     &lt;dbl&gt;
+## 1 GB15YOBZ48250974998548 GB54DWVO54573984166905   0.0105
+## 2 GB07HDMW57215705957758 GB40YFNK03866694848330   0.502</code></pre>
+<p>Using ggpairs(), we can see a matrix of all possible plots of PAM clustering with the Gower Dissimilarity for categoricals.</p>
+<pre class="r"><code>pamclust5 &lt;- dat1 %&gt;% mutate(cluster = as.factor(pam10$clustering))
+
+pamclust5 &lt;- pamclust5 %&gt;% mutate_all(as.numeric)
+
+ggpairs(pamclust5, columns = 1:3, aes(color = as.factor(rodPumpScale$Failure_Type)))</code></pre>
+<p><img src="/project/project3_files/figure-html/unnamed-chunk-23-1.png" width="672" style="display: block; margin: auto;" /></p>
+<pre class="r"><code>pam10$silinfo$avg.width</code></pre>
+<pre><code>## [1] 0.174394</code></pre>
+<p>Colored the cluster by failure type and attempted to see if the cluster grouped and separated by themselves into failure type. It seems that most of the variables aren’t clustering into their failure types automatically. Notice, the plots involving the categorical variables. The Gower Dissimilarity allows for categoricals to be placed in a PAM model by “dummy” coding 0,1,,etc. for each category within the variable. However, that was a 4 x 4 matrix of plots and we have 30 variables. Cannot plot a 30 x 30 matrix that is legible. Instead, we use the silhouette width criteria. The average silhouette width is 0.174. According to the goodness of fit criteria, this means &quot;no substantial structure has been found&quot;. This means that with PAM clustering method, there probably isn't a hidden pattern or group within the data. However, as previously said, this isn't necessairly a bad thing. It indicates the the variables are different from each other and possibly a different method can find a pattern.</p>
+</div>
+<div id="pca-dimensionality-reduction" class="section level1">
+<h1>PCA Dimensionality Reduction</h1>
+<p>PCA is a mathematical procedure that reduces the number of variables in your dataset and reveals the underlying structure of the dataset's variance. The &quot;Principle Components (PC's)&quot; are the vectors pointed in the direction of where the data is most spread out (i.e highest variance). PCA takes the number of correlated variables and finds combinations that retain <em>most</em> of the information but are <em>uncorrelated</em> with each. As a result, a large dataset with many variables is reduced to a smaller number of PC's. What's the direction of the highest variance then? PC1's direction of highest variance will be the line that is perpendicular to the residuals, and PC2 will be perpendicular to PC1 and so on. In R, there is a single function we can run to perform PCA on our scaled numerical variables.</p>
+<p>To determine which PC's to keep, there are 2 criteria: Kaisser's Rule (Eigenvalues &gt; 1) or Cumulative Proportion of Variance Until &gt; 80%.</p>
+<pre class="r"><code>eigval &lt;- PCA$sdev^2
+eigval</code></pre>
+<pre><code>##     Comp.1     Comp.2     Comp.3     Comp.4     Comp.5     Comp.6     Comp.7 
+## 4.50541092 2.57331780 1.87310003 1.67270537 1.53370882 1.29773448 1.14276601 
+##     Comp.8     Comp.9    Comp.10    Comp.11    Comp.12    Comp.13    Comp.14 
+## 1.06085186 0.96728608 0.86447708 0.81256209 0.77628331 0.67312521 0.57487498 
+##    Comp.15    Comp.16    Comp.17    Comp.18    Comp.19    Comp.20    Comp.21 
+## 0.51256489 0.50137330 0.39469954 0.35456115 0.31377587 0.26371699 0.21732224 
+##    Comp.22    Comp.23 
+## 0.04009173 0.02577362</code></pre>
+<p>If we follow the Cumlative Proportion of Variance rule, PC 1:11 are chosen.</p>
+<pre class="r"><code>round(cumsum(eigval)/sum(eigval), 2)  #cumulative proportion of variance</code></pre>
+<pre><code>##  Comp.1  Comp.2  Comp.3  Comp.4  Comp.5  Comp.6  Comp.7  Comp.8  Comp.9 Comp.10 
+##    0.20    0.31    0.39    0.46    0.53    0.59    0.64    0.68    0.72    0.76 
+## Comp.11 Comp.12 Comp.13 Comp.14 Comp.15 Comp.16 Comp.17 Comp.18 Comp.19 Comp.20 
+##    0.80    0.83    0.86    0.89    0.91    0.93    0.95    0.96    0.98    0.99 
+## Comp.21 Comp.22 Comp.23 
+##    1.00    1.00    1.00</code></pre>
+<p>If we follow Kaiser's Rule, PC 1:8 are chosen. I will choose Kaiser's Rule for the rest of my PC analysis.</p>
+<pre class="r"><code>roddf &lt;- data.frame(PC1 = PCA$scores[, 1], PC2 = PCA$scores[, 
+    2], PC3 = PCA$scores[, 3], PC4 = PCA$scores[, 4], PC5 = PCA$scores[, 
+    5], PC6 = PCA$scores[, 6], PC7 = PCA$scores[, 7], PC8 = PCA$scores[, 
+    8])
+
+Rod_PC &lt;- rodPump %&gt;% mutate(PC1 = PCA$scores[, 1], PC2 = PCA$scores[, 
+    2], PC3 = PCA$scores[, 3], PC4 = PCA$scores[, 4], PC5 = PCA$scores[, 
+    5], PC6 = PCA$scores[, 6], PC7 = PCA$scores[, 7], PC8 = PCA$scores[, 
+    8]) %&gt;% mutate(Cluster = pamclust5$cluster)
+
+
+ggplot(Rod_PC, aes(PC1, PC2)) + geom_point(aes(color = Failure_Type)) + 
+    stat_ellipse(data = Rod_PC[Rod_PC$PC1 &gt; 5, ], aes(PC1, PC2), 
+        color = &quot;blue&quot;) + stat_ellipse(data = Rod_PC[Rod_PC$PC1 &lt; 
+    -5, ], aes(PC1, PC2), color = &quot;blue&quot;) + stat_ellipse(data = Rod_PC[Rod_PC$PC2 &gt; 
+    4.1, ], aes(PC1, PC2), color = &quot;red&quot;) + stat_ellipse(data = Rod_PC[Rod_PC$PC2 &lt; 
+    -4.7, ], aes(PC1, PC2), color = &quot;red&quot;)</code></pre>
+<p><img src="/project/project3_files/figure-html/unnamed-chunk-28-1.png" width="672" style="display: block; margin: auto;" /></p>
+<p>Notice how the Rod Pumps were high in PCA 1 and PCA 2, the failure was in the tubing, while if they were low in PCA 1 and PCA 2, the failure was in the sucker rod. What variables make up those PC’s?</p>
+<pre class="r"><code>PCA$loadings[1:7, 1:2] %&gt;% as.data.frame %&gt;% rownames_to_column %&gt;% 
+    ggplot() + geom_hline(aes(yintercept = 0), lty = 2) + geom_vline(aes(xintercept = 0), 
+    lty = 2) + ylab(&quot;PC2&quot;) + xlab(&quot;PC1&quot;) + geom_segment(aes(x = 0, 
+    y = 0, xend = Comp.1, yend = Comp.2), arrow = arrow(), col = &quot;red&quot;) + 
+    geom_label(aes(x = Comp.1 * 1.1, y = Comp.2 * 1.1, label = rowname))</code></pre>
+<p><img src="/project/project3_files/figure-html/unnamed-chunk-29-1.png" width="672" style="display: block; margin: auto;" /></p>
+<p>Those 7 variables all positively contribute to PC1 and PC2. Secondary Setpoint and max_unguided DLS negatively contribute to PC2. The angles between vectors will tell the correlation between categories within a PC. The closer the vectors, the greater their correlation is within the PC’s.<br />
+Angle &lt; 90 = Positive correlation between categories<br />
+Angle &gt; 90 = Negative correlation between categories<br />
+High correlations between Pump_Fillage and Gross_StrokeLength. However, this is only 1 plot from the results! Ideally, I want to automate the process of finding the ideal ellipse based on failure type and display the loading vectors. That can be found finding a loop of PCA Biplots.</p>
+<pre class="r"><code>library(factoextra)
+
+empty_list = list()
+k = 1
+for (i in 1:8) {
+    for (j in 2:8) {
+        if (i &lt; j) {
+            
+            empty_list[[k]] = fviz_pca_biplot(PCA, axes = c(i, 
+                j), addEllipses = T, ellipse.level = 0.95, habillage = as.factor(Rod_PC$Failure_Type), 
+                label = &quot;var&quot;, col.var = &quot;black&quot;, labelsize = 3, 
+                pointsize = 1, ggtheme = theme_minimal(), legend.title = &quot;Failure Type&quot;) + 
+                coord_fixed() + ggtitle(&quot;PCA - Biplot&quot;) + theme(plot.title = element_text(hjust = 0.5), 
+                legend.position = &quot;bottom&quot;)
+            k = k + 1
+        }
+    }
+}
+empty_list[[1]]</code></pre>
+<p><img src="/project/project3_files/figure-html/unnamed-chunk-30-1.png" width="672" style="display: block; margin: auto;" /></p>
+<pre class="r"><code>empty_list[[3]]</code></pre>
+<p><img src="/project/project3_files/figure-html/unnamed-chunk-30-2.png" width="672" style="display: block; margin: auto;" /></p>
+<p>The PCA Biplot loops returns every relevent plot for the combinations of PCA's, automatically groups the points by failure type with colored ellipses, and displays the loading vectors. The loop returned 28 plots. However, the first few PC's explain the most variabilty, which is shown as a percentage on the x and y axis. As a result, PC1 by PC2 Biplot explains the most variabilty as a combination. PC1 explains 19.6% variabilty and PC2 explains 11.2% variability.</p>
+<p>From the PC1 by PC2 biplot, if the data is negative in PC1 but positive in PC2, Avg_water_SG is driving the sucker rod failure. Additionally, if the data is negative in both PC's, then Lifespan_days is driving the sucker rod failures. Lifespan and Avg_Water_SG are potential causes/indicators of sucker rod failure. While it seems that if your positive in both PC's, Avg_Pressure_Casing, Avg_Pressure_Tubing, Avg_Oil_Volume, Avg_Water_Volume, Avg_Pressure_Flowline, Pump_Bore, and Stroke_Length have the longest vectors that are contributing to Tubing failure. If your positive in PC1 but negative in PC2, Rods failure is likely with Max_Unguided_DLS, DLS_High_in_Hole, Max_Sideload.</p>
+<p>Usually, the first few plots are the most useful because the first few PC's have the largest variability. Plot 1 and Plot 3 have the most useful information. Their trends repeat in other plots or some plots are difficult to see any noticeable correlation. In Plot 3, Lifespan and Water_SG contribute to Sucker Rod Pump failure. Nipple_Set_Depth, Route, and Yesterday_Avg_SPM contribute to Rods failure.</p>
+</div>
+<div id="multinomial-logistical-regression-with-10-fold-cross-validation-and-lasso" class="section level1">
+<h1>Multinomial Logistical Regression with 10 Fold Cross Validation and LASSO</h1>
+<p>A multinomial logistical regression is a supervised model that will model the probability of a multinomial outcome (i.e. greater than 2). The model will attempt to predict the three failure types using the other variables in the dataset. Multinomial logistical regression finds the odds/risk ratios of failure based on probability. LASSO is a method that enhances prediction accuracy and leads to more interpretable models by finding the variables in the dataset that contribute most to failure. K-fold cross validation is a supervised method in which the data is partitioned into two parts: the training and testing set. From there, the model trains one set with the data and tests the data against the other set. We repeat this for many partitions and find the average prediction performance on that. 10-fold CV divides the data into 10 parts and uses 9 parts as the training set and 1 as the testing set. 10-fold CV repeats this process 10 times. The purpose of cross validation is to test the models's ability to make predictions on <strong>new</strong> data that was <strong>not</strong> used to estimate it.</p>
+<p>We want to create a multinomial logisitcal regression model that can predict the 3 types of rod pump failure using the rest of the variables in the dataset.</p>
+<p>In a new dataset, create a new variable called &quot;y&quot; to assign numerics for the failure types.</p>
+<ul>
+<li>Sucker Rod Pump = 0</li>
+<li>Rods = 1</li>
+<li>Tubing = 2</li>
+</ul>
+<p>Remove &quot;Rod_ID&quot;, &quot;Failure_Type&quot;, &quot;Rod_Make&quot;, and &quot;De-Sand Company&quot; from that, and perform multinomial logistical regression on all the variables in that dataset. Those variables are removed because they either cause errors due to having a standard deviation of 0, overload the regression with to many variables, or the model response variable (&quot;y&quot;) is based on that variable (Failure_Type). I ran a LASSO away from this file and these variables don't impact the LASSO anyway.</p>
+<pre class="r"><code>library(nnet)
+
+data1 &lt;- rodPump %&gt;% mutate(y = ifelse(Failure_Type == &quot;Sucker Rod Pump&quot;, 
+    0, ifelse(Failure_Type == &quot;Rods&quot;, 1, 2))) %&gt;% select(-Rod_ID, 
+    -Failure_Type, -Rod_Make, -De_Sand_Company)
+
+multi &lt;- multinom(y ~ ., data = data1)</code></pre>
+<pre><code>## # weights:  117 (76 variable)
+## initial  value 527.333899 
+## iter  10 value 449.495560
+## iter  20 value 435.175345
+## iter  30 value 430.067476
+## iter  40 value 422.157786
+## iter  50 value 366.367182
+## iter  60 value 357.089402
+## iter  70 value 351.930708
+## iter  80 value 351.370632
+## iter  90 value 351.354507
+## iter 100 value 351.345240
+## final  value 351.345240 
+## stopped after 100 iterations</code></pre>
+<p>Below, the p-values of the model are shown.</p>
+<pre class="r"><code># pvals
+z &lt;- summary(multi)$coefficients/summary(multi)$standard.errors
+(1 - pnorm(abs(z))) * 2</code></pre>
+<pre><code>##   (Intercept) Primary_Setpoint Secondary_Setpoint Stroke_Length
+## 1           0       0.04590211          0.7170797     0.1451835
+## 2           0       0.55735433          0.1770649     0.5453100
+##   Gross_StrokeLength Pump_Fillage Yesterdays_Avg_SPM
+## 1         0.01205403    0.3672933                  0
+## 2         0.29532820    0.1391908                  0
+##   BHA_ConfigurationPACKER_DONNAN BHA_ConfigurationPACKER_TAC_DONNAN
+## 1                              0                                  0
+## 2                              0                                  0
+##   BHA_ConfigurationTAC_ABOVE_NIP BHA_ConfigurationTAC_BELOW_NIP
+## 1                              0                              0
+## 2                              0                              0
+##   Max_Unguided_DLS DLS_High_in_Hole Gas_Anchor_Length Max_Inclination
+## 1     8.991067e-04     1.437583e-11         0.6642665       0.7135054
+## 2     1.393254e-05     7.608428e-01         0.9694474       0.9845524
+##   Wellbore_categoryLowTangent Wellbore_categoryOffLease
+## 1                           0                         0
+## 2                           0                         0
+##   Wellbore_categoryVertical Packer_vs_Tachornet Packer_vs_TacOTHER_ANCHOR
+## 1                         0                   0                         0
+## 2                         0                   0                         0
+##   Packer_vs_TacOTHER_PACKER Packer_vs_Tacslimline Avg_Pressure_Flowline
+## 1                         0                     0          9.117474e-06
+## 2                         0                     0          3.209139e-02
+##   Avg_Pressure_Tubing Avg_Pressure_Casing Avg_Differential_Pressure
+## 1         0.001967131           0.2689771                 0.4456868
+## 2         0.176500076           0.7382288                 0.8846176
+##   Avg_Oil_Volume Avg_Water_Volume Avg_Water_SG Rod_Sinker_TypeSLICK_SINKER_BARS
+## 1     0.02983843       0.50841290            0                                0
+## 2     0.02510428       0.02266409            0                                0
+##   Rod_Sinker_TypeSUCKER_RODS_W_GUIDES Rod_Sinker_TypeUNKNOWN      Route
+## 1                                   0                      0 0.02482336
+## 2                                   0                      0 0.00000000
+##   Overall_Max_Sideload Shallow_max_Sideload Nipple_Set_Depth Pump_Bore
+## 1            0.0664236           0.06634314     0.0003823764         0
+## 2            0.4989452           0.42956768     0.0168277882         0
+##   Lifespan_Days
+## 1     0.3960396
+## 2     0.1585777</code></pre>
+<p>To get the classification statistics from the confusion matrix (F1, true-positive rate, false-positive rate,etc.), I created a function called &quot;class_diags&quot;, which takes in the multinomial regression and the response truth variable .</p>
+<pre class="r"><code>class_diag &lt;- function(multi, truth) {
+    
+    tab &lt;- table(pred = predict(multi, type = &quot;class&quot;), truth) %&gt;% 
+        addmargins
+    
+    colsum1 = tab[1, 1] + tab[2, 1] + tab[3, 1]
+    colsum2 = tab[1, 2] + tab[2, 2] + tab[3, 2]
+    colsum3 = tab[1, 3] + tab[2, 3] + tab[3, 3]
+    colTotal = colsum1 + colsum2 + colsum3
+    
+    rowsum1 = tab[1, 1] + tab[1, 2] + tab[1, 3]
+    rowsum2 = tab[2, 1] + tab[2, 2] + tab[2, 3]
+    rowsum3 = tab[3, 1] + tab[3, 2] + tab[3, 3]
+    
+    acc = (tab[1, 1] + tab[2, 2] + tab[3, 3])/(colTotal)  #accuracy
+    
+    # recall or sensitivity
+    sens_suck = tab[1, 1]/colsum1
+    sens_rod = tab[2, 2]/colsum2
+    sens_tub = tab[3, 3]/colsum3
+    
+    weight_sens = ((colsum1/colTotal) * sens_suck) + ((colsum2/colTotal) * 
+        sens_rod) + ((colsum3/colTotal) * sens_tub)
+    
+    # precision
+    ppv_suck = tab[1, 1]/rowsum1
+    ppv_rod = tab[2, 2]/rowsum2  #precision
+    ppv_tub = tab[3, 3]/rowsum3
+    
+    weight_ppv = ((colsum1/colTotal) * ppv_suck) + ((colsum2/colTotal) * 
+        ppv_rod) + ((colsum3/colTotal) * ppv_tub)
+    
+    # F1
+    F1_suck = (2 * ppv_suck * sens_suck)/(ppv_suck + sens_suck)
+    F1_rod = (2 * ppv_rod * sens_rod)/(ppv_rod + sens_rod)
+    F1_tub = (2 * ppv_tub * sens_tub)/(ppv_tub + sens_tub)
+    
+    # overall F1
+    tp = tab[1, 1] + tab[2, 2] + tab[3, 3]
+    fp = tab[1, 2] + tab[1, 3] + tab[2, 1] + tab[2, 3] + tab[3, 
+        1] + tab[3, 2]
+    fn = fp
+    F1_overall = tp/(tp + (0.5 * (fn + fp)))
+    F1_weighted = (2 * weight_ppv * weight_sens)/(weight_ppv + 
+        weight_sens)
+    
+    
+    data.frame(acc, sens_suck, sens_rod, sens_tub, ppv_suck, 
+        ppv_rod, ppv_tub, F1_suck, F1_rod, F1_tub, weight_sens, 
+        weight_ppv, F1_weighted, tp, fp, fn, F1_overall)
+    
+}</code></pre>
+<p>The confusion matrix for the multinomial logistical regression is shown below.</p>
+<pre class="r"><code># predictions and classify
+probs &lt;- predict(multi, type = &quot;probs&quot;)
+table(pred = predict(multi, type = &quot;class&quot;), truth = data1$y) %&gt;% 
+    addmargins</code></pre>
+<pre><code>##      truth
+## pred    0   1   2 Sum
+##   0    50   8  25  83
+##   1    14  47  17  78
+##   2    57  32 230 319
+##   Sum 121  87 272 480</code></pre>
+<p>Using &quot;class_diags&quot;, the following classification statistics are found.</p>
+<pre class="r"><code>class_diag(multi, data1$y)</code></pre>
+<pre><code>##       acc sens_suck  sens_rod  sens_tub  ppv_suck   ppv_rod   ppv_tub   F1_suck
+## 1 0.68125 0.4132231 0.5402299 0.8455882 0.6024096 0.6025641 0.7210031 0.4901961
+##     F1_rod    F1_tub weight_sens weight_ppv F1_weighted  tp  fp  fn F1_overall
+## 1 0.569697 0.7783418     0.68125  0.6696406   0.6753954 327 153 153    0.68125</code></pre>
+<p>I'll focus primarily on the &quot;overall_F1&quot;, which is the weighted average between the precision (i.e. the proportion of correctly predicted from the model) and sensitivity (i.e. true positive rate). The F1 is 0.68125. Ideally, a model with a F1 score of 1 is the goal. Using LASSO, we can predict the variables that contribute to the multinomial regression the most. However, before LASSO is ran, we must determine the ideal lambda value for the LASSO model.</p>
+<pre class="r"><code>library(glmnet)
+
+y1 &lt;- as.matrix(data1$y)
+
+fail_preds1 &lt;- model.matrix(y ~ ., data = data1)[, -1]  #predictors
+fail_preds1 &lt;- scale(fail_preds1)
+
+cv &lt;- cv.glmnet(fail_preds1, y1, family = &quot;multinomial&quot;, type.multinomial = &quot;grouped&quot;, 
+    parallel = TRUE)
+plot(cv)</code></pre>
+<p><img src="/project/project3_files/figure-html/unnamed-chunk-36-1.png" width="672" style="display: block; margin: auto;" /></p>
+<p>The plot above shows the multinomial deviance by the log base 10 of lambda. The best lambda maximizes the 10 fold cross-validation that will occur next. It is slightly subjective in which position is the &quot;best&quot; lambda. Most data engineers agree that either the global minimum of the curve above or 1 standard error above that minimum is the ideal position for lambda. I will use the minimum of the curve above as the lambda value.</p>
+<pre class="r"><code>lasso_fit1 &lt;- glmnet(fail_preds1, y1, family = &quot;multinomial&quot;, 
+    lambda = cv$lambda.min)
+coef(lasso_fit1)  #min</code></pre>
+<pre><code>## $`0`
+## 38 x 1 sparse Matrix of class &quot;dgCMatrix&quot;
+##                                               s0
+##                                     -0.171260982
+## Primary_Setpoint                    -0.025752942
+## Secondary_Setpoint                   .          
+## Stroke_Length                       -0.014957344
+## Gross_StrokeLength                   .          
+## Pump_Fillage                         .          
+## Yesterdays_Avg_SPM                   .          
+## BHA_ConfigurationPACKER_DONNAN       .          
+## BHA_ConfigurationPACKER_TAC_DONNAN  -0.009783599
+## BHA_ConfigurationTAC_ABOVE_NIP       .          
+## BHA_ConfigurationTAC_BELOW_NIP       .          
+## Max_Unguided_DLS                     .          
+## DLS_High_in_Hole                     .          
+## Gas_Anchor_Length                    .          
+## Max_Inclination                      .          
+## Wellbore_categoryLowTangent          .          
+## Wellbore_categoryOffLease            .          
+## Wellbore_categoryVertical            .          
+## Packer_vs_Tachornet                  .          
+## Packer_vs_TacOTHER_ANCHOR            .          
+## Packer_vs_TacOTHER_PACKER           -0.076672527
+## Packer_vs_Tacslimline                .          
+## Avg_Pressure_Flowline               -0.299345236
+## Avg_Pressure_Tubing                  0.225973737
+## Avg_Pressure_Casing                  .          
+## Avg_Differential_Pressure            .          
+## Avg_Oil_Volume                       .          
+## Avg_Water_Volume                     .          
+## Avg_Water_SG                         .          
+## Rod_Sinker_TypeSLICK_SINKER_BARS     .          
+## Rod_Sinker_TypeSUCKER_RODS_W_GUIDES  .          
+## Rod_Sinker_TypeUNKNOWN               .          
+## Route                                .          
+## Overall_Max_Sideload                 .          
+## Shallow_max_Sideload                 .          
+## Nipple_Set_Depth                    -0.151755162
+## Pump_Bore                           -0.159465082
+## Lifespan_Days                        .          
+## 
+## $`1`
+## 38 x 1 sparse Matrix of class &quot;dgCMatrix&quot;
+##                                              s0
+##                                     -0.59726901
+## Primary_Setpoint                     0.29328172
+## Secondary_Setpoint                   .         
+## Stroke_Length                        .         
+## Gross_StrokeLength                  -0.24583303
+## Pump_Fillage                         .         
+## Yesterdays_Avg_SPM                   0.31204976
+## BHA_ConfigurationPACKER_DONNAN       .         
+## BHA_ConfigurationPACKER_TAC_DONNAN   .         
+## BHA_ConfigurationTAC_ABOVE_NIP      -0.01560195
+## BHA_ConfigurationTAC_BELOW_NIP       .         
+## Max_Unguided_DLS                     .         
+## DLS_High_in_Hole                     .         
+## Gas_Anchor_Length                    .         
+## Max_Inclination                      .         
+## Wellbore_categoryLowTangent          .         
+## Wellbore_categoryOffLease           -0.07491933
+## Wellbore_categoryVertical           -0.18858624
+## Packer_vs_Tachornet                  0.09646013
+## Packer_vs_TacOTHER_ANCHOR            .         
+## Packer_vs_TacOTHER_PACKER            .         
+## Packer_vs_Tacslimline                .         
+## Avg_Pressure_Flowline                0.31653528
+## Avg_Pressure_Tubing                 -0.08586553
+## Avg_Pressure_Casing                  .         
+## Avg_Differential_Pressure            .         
+## Avg_Oil_Volume                       .         
+## Avg_Water_Volume                     .         
+## Avg_Water_SG                         .         
+## Rod_Sinker_TypeSLICK_SINKER_BARS     0.03515916
+## Rod_Sinker_TypeSUCKER_RODS_W_GUIDES -0.03374757
+## Rod_Sinker_TypeUNKNOWN              -0.09791196
+## Route                                .         
+## Overall_Max_Sideload                 .         
+## Shallow_max_Sideload                 .         
+## Nipple_Set_Depth                     0.22604967
+## Pump_Bore                            .         
+## Lifespan_Days                        .         
+## 
+## $`2`
+## 38 x 1 sparse Matrix of class &quot;dgCMatrix&quot;
+##                                              s0
+##                                      0.76852999
+## Primary_Setpoint                     .         
+## Secondary_Setpoint                   .         
+## Stroke_Length                        .         
+## Gross_StrokeLength                   0.10308836
+## Pump_Fillage                        -0.03255526
+## Yesterdays_Avg_SPM                   .         
+## BHA_ConfigurationPACKER_DONNAN       .         
+## BHA_ConfigurationPACKER_TAC_DONNAN   .         
+## BHA_ConfigurationTAC_ABOVE_NIP       0.19395036
+## BHA_ConfigurationTAC_BELOW_NIP       .         
+## Max_Unguided_DLS                     0.08587136
+## DLS_High_in_Hole                     .         
+## Gas_Anchor_Length                   -0.02283934
+## Max_Inclination                     -0.02034323
+## Wellbore_categoryLowTangent          .         
+## Wellbore_categoryOffLease            0.09723384
+## Wellbore_categoryVertical            0.04112379
+## Packer_vs_Tachornet                 -0.11322069
+## Packer_vs_TacOTHER_ANCHOR            .         
+## Packer_vs_TacOTHER_PACKER            0.02811945
+## Packer_vs_Tacslimline                .         
+## Avg_Pressure_Flowline                .         
+## Avg_Pressure_Tubing                  .         
+## Avg_Pressure_Casing                  .         
+## Avg_Differential_Pressure            0.11287975
+## Avg_Oil_Volume                       0.68190404
+## Avg_Water_Volume                     0.10852998
+## Avg_Water_SG                        -0.06207435
+## Rod_Sinker_TypeSLICK_SINKER_BARS    -0.07862541
+## Rod_Sinker_TypeSUCKER_RODS_W_GUIDES  .         
+## Rod_Sinker_TypeUNKNOWN               .         
+## Route                               -0.21179844
+## Overall_Max_Sideload                 .         
+## Shallow_max_Sideload                 .         
+## Nipple_Set_Depth                     .         
+## Pump_Bore                            .         
+## Lifespan_Days                        .</code></pre>
+<p>From the LASSO, the following variables contribute to the multinomial regression the most.</p>
+<p>For Sucker Rod Pump failure:<br />
+* Primary_Setpoint<br />
+* Stroke_Length<br />
+* BHA_ConfigurationPACKER_TAC_DONNAN<br />
+* Packer_vs_TacOTHER_PACKER<br />
+* Avg_Pressure_Flowline<br />
+* Avg_Pressure_Tubing<br />
+* Nipple_Set_Depth<br />
+* Pump_Bore</p>
+<p>For Rods failure:<br />
+* Primary_Setpoint<br />
+* Gross_StrokeLength<br />
+* Yesterdays_Avg_SPM<br />
+* BHA_ConfigurationTAC_ABOVE_NIP<br />
+* Wellbore_categoryOffLease<br />
+* Wellbore_categoryVertical<br />
+* Packer_vs_Tachornet<br />
+* Avg_Pressure_Flowline<br />
+* Rod_Sinker_TypeSLICK_SINKER_BARS<br />
+* Rod_Sinker_TypeSUCKER_RODS_W_GUIDES<br />
+* Rod_Sinker_TypeUNKNOWN<br />
+* Nipple_Set_Depth</p>
+<p>For Tubing failure:<br />
+* Gross_StrokeLength<br />
+* Pump_Fillage<br />
+* BHA_ConfigurationTAC_ABOVE_NIP<br />
+* Max_Unguided_DLS<br />
+* Gas_Anchor_Length<br />
+* Wellbore_categoryOffLease<br />
+* Wellbore_categoryVertical<br />
+* Packer_vs_Tachornet<br />
+* Packer_vs_TacOTHER_PACKER<br />
+* Avg_Differential_Pressure<br />
+* Avg_Oil_Volume<br />
+* Avg_Water_Volume<br />
+* Avg_Water_SG<br />
+* Rod_Sinker_TypeSLICK_SINKER_BARS<br />
+* Route</p>
+<p>Using these variables above, perform 10 fold cross validation with a multinomial logistic regression.</p>
+<pre class="r"><code>set.seed(1234)
+k = 10
+
+dat &lt;- data1 %&gt;% mutate(BHA_ConfigurationPACKER_TAC_DONNAN = ifelse(data1$BHA_Configuration == 
+    &quot;PACKER_TAC_DONNAN&quot;, 1, 0), BHA_ConfigurationTAC_ABOVE_NIP = ifelse(data1$BHA_Configuration == 
+    &quot;TAC_ABOVE_NIP&quot;, 1, 0), Packer_vs_TacOTHER_PACKER = ifelse(data1$Packer_vs_Tac == 
+    &quot;OTHER_PACKER&quot;, 1, 0), Packer_vs_Tachornet = ifelse(data1$Packer_vs_Tac == 
+    &quot;hornet&quot;, 1, 0), Wellbore_categoryOffLease = ifelse(data1$Wellbore_category == 
+    &quot;OffLease&quot;, 1, 0), Wellbore_categoryVertical = ifelse(data1$Wellbore_category == 
+    &quot;Vertical&quot;, 1, 0), Rod_Sinker_TypeSLICK_SINKER_BARS = ifelse(data1$Rod_Sinker_Type == 
+    &quot;SLICK_SINKER_BARS&quot;, 1, 0), Rod_Sinker_TypeSUCKER_RODS_W_GUIDES = ifelse(data1$Rod_Sinker_Type == 
+    &quot;SUCKER_RODS_W_GUIDES&quot;, 1, 0), Rod_Sinker_TypeUNKNOWN = ifelse(data1$Rod_Sinker_Type == 
+    &quot;UNKNOWN&quot;, 1, 0))
+
+data &lt;- dat %&gt;% sample_frac  #put rows of dataset in random order
+folds &lt;- ntile(1:nrow(data), n = 10)  #create fold labels
+
+diags &lt;- NULL
+for (i in 1:k) {
+    train &lt;- data[folds != i, ]  #create training set (all but fold i)
+    test &lt;- data[folds == i, ]  #create test set (just fold i)
+    truth &lt;- test$y  #save truth labels from fold i
+    
+    fit &lt;- multinom(y ~ Primary_Setpoint + Avg_Pressure_Flowline + 
+        Avg_Pressure_Tubing + BHA_ConfigurationPACKER_TAC_DONNAN + 
+        Packer_vs_TacOTHER_PACKER + Nipple_Set_Depth + Pump_Bore + 
+        Gross_StrokeLength + Yesterdays_Avg_SPM + Wellbore_categoryOffLease + 
+        Wellbore_categoryVertical + Packer_vs_Tachornet + Rod_Sinker_TypeSLICK_SINKER_BARS + 
+        Rod_Sinker_TypeSUCKER_RODS_W_GUIDES + Rod_Sinker_TypeUNKNOWN + 
+        BHA_ConfigurationTAC_ABOVE_NIP + Max_Unguided_DLS + Gas_Anchor_Length + 
+        Avg_Differential_Pressure + Avg_Oil_Volume + Avg_Water_Volume + 
+        Avg_Water_SG + Route, data = train)
+    
+    probs &lt;- predict(fit, newdata = test, type = &quot;probs&quot;)
+    # diags&lt;-rbind(diags,class_diag(fit,truth))
+    diags[i] &lt;- list(table(pred = predict(fit, newdata = test, 
+        type = &quot;class&quot;), truth = truth) %&gt;% addmargins)
+}</code></pre>
+<pre><code>## # weights:  75 (48 variable)
+## initial  value 474.600509 
+## iter  10 value 395.001376
+## iter  20 value 387.949161
+## iter  30 value 338.420806
+## iter  40 value 332.423610
+## iter  50 value 328.626077
+## iter  60 value 328.624320
+## iter  70 value 328.623040
+## iter  70 value 328.623039
+## iter  70 value 328.623039
+## final  value 328.623039 
+## converged
+## # weights:  75 (48 variable)
+## initial  value 474.600509 
+## iter  10 value 393.615886
+## iter  20 value 387.505778
+## iter  30 value 333.778196
+## iter  40 value 327.401557
+## iter  50 value 323.905407
+## iter  60 value 323.889129
+## iter  70 value 323.888447
+## final  value 323.888387 
+## converged
+## # weights:  75 (48 variable)
+## initial  value 474.600509 
+## iter  10 value 395.538062
+## iter  20 value 388.126228
+## iter  30 value 323.920416
+## iter  40 value 316.346067
+## iter  50 value 312.958721
+## iter  60 value 312.877664
+## iter  70 value 312.850698
+## final  value 312.850468 
+## converged
+## # weights:  75 (48 variable)
+## initial  value 474.600509 
+## iter  10 value 401.131095
+## iter  20 value 394.244757
+## iter  30 value 339.995000
+## iter  40 value 333.074772
+## iter  50 value 328.268518
+## iter  60 value 328.256371
+## iter  70 value 328.238980
+## final  value 328.238897 
+## converged
+## # weights:  75 (48 variable)
+## initial  value 474.600509 
+## iter  10 value 396.548327
+## iter  20 value 389.412507
+## iter  30 value 333.293022
+## iter  40 value 328.299367
+## iter  50 value 325.628804
+## iter  60 value 325.528352
+## iter  70 value 325.469116
+## iter  70 value 325.469114
+## iter  70 value 325.469114
+## final  value 325.469114 
+## converged
+## # weights:  75 (48 variable)
+## initial  value 474.600509 
+## iter  10 value 399.552483
+## iter  20 value 394.316709
+## iter  30 value 333.076579
+## iter  40 value 327.809567
+## iter  50 value 324.640152
+## iter  60 value 324.463914
+## iter  70 value 324.438656
+## final  value 324.438607 
+## converged
+## # weights:  75 (48 variable)
+## initial  value 474.600509 
+## iter  10 value 400.169522
+## iter  20 value 393.392060
+## iter  30 value 336.145961
+## iter  40 value 330.204334
+## iter  50 value 324.912820
+## iter  60 value 324.797828
+## iter  70 value 324.782951
+## final  value 324.782945 
+## converged
+## # weights:  75 (48 variable)
+## initial  value 474.600509 
+## iter  10 value 396.845032
+## iter  20 value 390.963772
+## iter  30 value 343.286099
+## iter  40 value 338.930952
+## iter  50 value 335.227689
+## iter  60 value 335.199627
+## final  value 335.189175 
+## converged
+## # weights:  75 (48 variable)
+## initial  value 474.600509 
+## iter  10 value 393.660929
+## iter  20 value 385.243309
+## iter  30 value 333.487358
+## iter  40 value 325.545556
+## iter  50 value 319.114587
+## iter  60 value 319.091936
+## iter  70 value 319.083816
+## final  value 319.083804 
+## converged
+## # weights:  75 (48 variable)
+## initial  value 474.600509 
+## iter  10 value 402.914044
+## iter  20 value 394.698885
+## iter  30 value 344.595904
+## iter  40 value 336.820673
+## iter  50 value 333.491052
+## iter  60 value 333.325640
+## iter  70 value 333.274185
+## final  value 333.274172 
+## converged</code></pre>
+<p>The 10 fold CV results in 10 different confusion matricies. I created a function called &quot;add&quot; that will combine all matricies and then use &quot;class_diags&quot; to get the resulting classification statistics.</p>
+<pre class="r"><code>add &lt;- function(x) Reduce(&quot;+&quot;, x)
+add(diags)</code></pre>
+<pre><code>##      truth
+## pred    0   1   2 Sum
+##   0    42   9  29  80
+##   1    14  32  20  66
+##   2    65  46 223 334
+##   Sum 121  87 272 480</code></pre>
+<p>The overall F1 is 0.61. The F1 score decreases after LASSO and 10-fold CV. This isn't ideal. I think this occured because there were some variables predicted by the LASSO for either 1 or 2 types of failure, rather than all 3. As a result, this variable can cause false positives for that failure type, since the model will apply that variable for all 3 failure type predictions. From the model, the Tubing failure is the only prediction that was well made. It had a recall (true-positive rate) of 0.82 and precision of 0.67. The plot below shows a visual representation of the logistic model. Ideally, if there is no overlap in the density plot, that means that the model predicted perfectly. If there is overlap, that indicates there are false-positives. It's easier to see the all of the overlap on the dashboard.</p>
+<pre class="r"><code>data2 &lt;- data1
+data2$logit &lt;- predict(multi)
+
+data2 &lt;- data2 %&gt;% mutate(Failure_Type = ifelse(y == 0, &quot;Sucker Rod Pump&quot;, 
+    ifelse(y == 1, &quot;Rods&quot;, &quot;Tubing&quot;)))
+
+# get predicted log-odds (logits)
+
+# plot logit scores for each truth category
+
+data2 &lt;- data2 %&gt;% mutate(outcome = factor(Failure_Type, levels = c(&quot;Sucker Rod Pump&quot;, 
+    &quot;Rods&quot;, &quot;Tubing&quot;)))
+
+ggplot(data2, aes(logit, fill = outcome)) + geom_density(alpha = 0.3, 
+    ) + geom_vline(xintercept = 0, lty = 2)</code></pre>
+<p><img src="/project/project3_files/figure-html/unnamed-chunk-40-1.png" width="672" style="display: block; margin: auto;" /></p>
+</div>

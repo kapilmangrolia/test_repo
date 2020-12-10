@@ -1,0 +1,651 @@
+---
+title: 'Rod Pump Failure Data Analysis'
+author: "NSC325 - Fall 2020"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output:
+  html_document:
+    toc: yes
+    toc_float:
+      collapsed: no
+      smooth_scroll: yes
+  pdf_document:
+    toc: no
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, eval = TRUE, fig.align = "center", warning = F, message = F,
+tidy=TRUE, tidy.opts=list(width.cutoff=60), R.options=list(max.print=100))
+```
+
+Kapil Mangrolia  
+EID: kvm386
+
+#Introduction
+
+The dataset represents the rod pump failure in pumpjack systems. The dataset is from ConocoPhillips. It has various columns for characteristics of rod pumps and how they possibly failed such as sideload, inclination, start/end time, failure type, etc. The purpose of this project is to attempt to find hidden patterns on how/where the rod pumps are failing and then present the results. The first step in the analysis process is to clean the dataset. 
+
+#Data Cleaning
+
+Step #1: Open the dataset and load relevent packages
+
+```{r}
+library(tidyverse)
+library(cluster)
+library(psych)
+library(GGally)
+library(factoextra)
+library(nnet)
+library(glmnet)
+```
+
+
+```{r}
+rodPump <-read.csv(file='rodpump_failure.csv', header=T, na.strings=c("","NA")) %>%
+  as.data.frame
+```
+
+Step #2: Remove and rename unwanted columns  
+
+What is an unwanted column? I define an unwanted column as a column filled with many 0's, empty values, or has anonymized data. 
+
+```{r,echo=FALSE}
+
+rodPump <-rodPump %>% select("Rod_ID"=roduid,
+    "Lifetime_Start"=lifetime_start,
+    "Lifetime_End"=lifetime_end,
+  "Failure_Type"=FAILURETYPE,
+    "Primary_Setpoint"=PrimarySetpoint ,
+    "Secondary_Setpoint"=SecondarySetpoint,
+    "Stroke_Length"=StrokeLength,
+    "Gross_StrokeLength"=GrossStrokeLength,
+    "Pump_Fillage"=Fillage,
+    "Yesterdays_Avg_SPM"=YesterdaysAverageSPM,
+    "BHA_Configuration"=bha_configuration,
+    "Max_Unguided_DLS"=max_unguided_dls,
+    "DLS_High_in_Hole"=dls_high_in_hole,
+    "Gas_Anchor_Length"=gas_anchor_length,
+    "Max_Inclination"=MAX_INCLINATION,
+    "Wellbore_category"=wellbore_category,
+    "Packer_vs_Tac"=packer_vs_tac,
+    "Avg_Pressure_Flowline"=AVG_PRESS_FLOWLINE,
+    "Avg_Pressure_Tubing"=AVG_PRESSURE_TUBING,
+    "Avg_Pressure_Casing"=AVG_PRESSURE_CASING,
+    "Avg_Differential_Pressure"=AVG_DIFFERENTIAL_PRESSURE,
+    "Avg_Oil_Volume"=AVG_OIL_VOLUME,
+    "Avg_Water_Volume"=AVG_WATER_VOLUME,
+    "Avg_Water_SG"=AVG_WATERSG,
+    "Rod_Sinker_Type"=rod_sinker_type,
+    "Rod_Make"=rod_make,
+    "Route"=ROUTE,
+    "Overall_Max_Sideload"=overall_max_sideload,
+    "Shallow_max_Sideload"=shallow_max_sideload,
+    "Max_Unguided_DLS"=max_unguided_dls,
+    "De_Sand_Company"=DESANDDEGAS_TYP,
+    "Nipple_Set_Depth"=NIPPLE_SET_DEPTH,
+    "Pump_Bore"=pump_bore) 
+
+```
+
+```{r}
+glimpse(rodPump)
+```
+
+
+Step 3: Remove NA, missing values, and duplicates
+
+```{r}
+rodPump <- rodPump %>% na.omit() %>% distinct() %>% filter_all(is.finite)
+```
+
+The dataset is has been cleaned. However,the "Lifetime_Start" and "Lifetime_End" aren't "tidy" and should be seperated into day,month,year, and time. Once those are tidy, we can subtract the "Lifetime_Start" from the "Lifetime_End" to get the "Lifespan" of the rod pump. I also convert the "Pump Bore" to a numeric column to avoid problems later on. Onto some simple summary statistics and plots.
+
+```{r}
+rodPump %>% 
+  mutate(Lifetime_Start=as.POSIXct(Lifetime_Start),Lifetime_End=as.POSIXct(Lifetime_End),
+         lifespan=Lifetime_End-Lifetime_Start,Lifespan_Days=as.numeric(lifespan)) %>% select(-Lifetime_Start,-Lifetime_End,-lifespan) %>% mutate(Pump_Bore = as.numeric(as.character(Pump_Bore))) %>% filter_all(is.finite) -> rodPump
+
+```
+
+#EDA: Summary Statistics
+
+Step 4: Organize data into seperate dataframes based on failure type
+
+```{r}
+tubing <- rodPump %>% filter(Failure_Type == "Tubing")
+rods <- rodPump %>% filter(Failure_Type == "Rods")
+sucker_rod_pump <- rodPump %>% filter(Failure_Type == "Sucker Rod Pump")
+```
+
+Step 5: Summary statistics for each dataframe
+
+```{r}
+library(psych)
+descriptives_tubing <- describeBy(x = tubing)
+descriptives_rods <- describeBy(x = rods)
+descriptives_sucker_rod_pump <- describeBy(x = sucker_rod_pump)
+```
+
+##### Tubing Failure Summary Statistics
+
+```{r,echo=FALSE}
+descriptives_tubing
+```
+
+##### Rod Failure Summary Statistics
+
+```{r,echo=FALSE}
+descriptives_rods
+```
+
+##### Sucker Rod Pump Failure Summary Statistics
+
+```{r,echo=FALSE}
+descriptives_sucker_rod_pump
+```
+
+### EDA: Exploratory Plots
+
+Just to take a peak at the data, here are some histograms of Pump Fillage for each failure type, filled by the wellbourne type. 
+
+```{r}
+
+ggplot(tubing, aes(Pump_Fillage, fill = Wellbore_category)) + geom_histogram(bins =60) + theme(plot.title = element_text(hjust = 0.5)) + ggtitle("Tubing Pump Fillage Histogram")
+
+ggplot(rods, aes(Pump_Fillage)) + geom_histogram(bins =60) + 
+  theme(plot.title = element_text(hjust = 0.5)) +
+          ggtitle("Rod Pump Fillage Histogram")
+
+ggplot(sucker_rod_pump, aes(Pump_Fillage)) + geom_histogram(bins =60) + 
+  theme(plot.title = element_text(hjust = 0.5)) +
+          ggtitle("Sucker Rod Pump Fillage Histogram")
+
+ggplot(rodPump, aes(x = seq(1,length(Lifespan_Days)),y=Lifespan_Days)) + 
+  geom_point(aes(color=Failure_Type)) + 
+  theme(plot.title = element_text(hjust = 0.5)) +
+          ggtitle("Lifespan of Rod Pump Systems")
+
+```
+
+# Correlation Heat Map
+
+Here is a correlation heat map of all variables. Notice how red variables mean there is high correlation while blue variables mean a low correlation. There aren't many noticeable high correlations, which isn't neccessairly a bad thing. This indicates that the variables are different from each other and there could be hidden patterns. However, there is a very high correlation between the max sideload and the shallow sideload. There is also a 70% correlation between oil volume and water volume. Also, in the corners, there are small clusters of slighlty red variables. These correlations will be useful in the PCA analysis.  
+
+```{r}
+
+cormat <- rodPump %>% select_if(is.numeric) %>% cor(use="pair") %>% as.data.frame
+
+cormat %>% rownames_to_column("var1") %>% pivot_longer(-1,'var2', values_to = "Correlation") %>% ggplot(aes(var1,var2,fill=Correlation))+geom_tile() +
+  scale_fill_gradient2(low="white",mid="blue",high="red") +#makes colors!
+  geom_text(aes(label=round(Correlation,2)),color = "black", size = 1.7) + #overlays correlation values
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) + #flips the x-axis labels
+  coord_fixed() +ggtitle("Correlation Heat Map")+ theme(plot.title = element_text(hjust = 0.5),axis.text.x=element_text(angle=45,hjust=1)) + xlab("") +
+  ylab("")
+
+
+```
+
+# Machine Learning: Clustering Methods: PAM
+
+"Partition Around Medoids", also known as PAM, is an unsupervised clustering method that is similar to Kmeans but handles outliers in a more efficient and robust way. Similar to kmeans, PAM determines clusters based on the distance between the centers of each cluster and the distance within each cluster. Ideally, we want well defined clusters. Well defined clusters are have large distance between each other but a small distance from the center within each cluster. PAM clustering will be performed to the entire dataset. We will attempt to see if the unsupervised clustering method will cluster by failure on its own. To begin, the dataset must be scaled/normailzed, which means to be converted to z-scores. 
+
+```{r}
+library(cluster)
+rodPumpScale <- rodPump %>% mutate_if(is.numeric, scale)
+```
+
+Now, I will use PAM clustering to attempt to find trends in the data. How do I know the ideal number of clusters? I will find the silhouette width of the scaled numerical data, which will give the ideal number of clusters for the scaled dataset. 
+
+```{r}
+
+pam_dat4 <- rodPumpScale %>% select(-Rod_ID,-Failure_Type,-BHA_Configuration,-Wellbore_category,-Packer_vs_Tac,-Rod_Sinker_Type,-Rod_Make,De_Sand_Company)
+
+
+sil_width4 <- vector()
+
+for(i in 2:15){
+  pam_fit4 <- pam(pam_dat4, k=i)
+  sil_width4[i] <- pam_fit4$silinfo$avg.width
+}
+
+ggplot()+geom_line(aes(x=1:15, y=sil_width4))+scale_x_continuous(name='k',breaks=1:15)+
+  ggtitle("Silhouette Width by Number of Clusters") + theme(plot.title = element_text(hjust = 0.5))
+
+```
+
+By the plot above, it seems that 3 clusters should be chosen for this data because the highest point in the plot is at k = 3. Now, PAM clustering can be performed and the results can be plotted.  
+
+```{r}
+pam_3 <- pam_dat4 %>% pam(3) #perform PAM
+
+##ggplot that
+pamclust4 <- pam_dat4 %>% mutate(cluster=as.factor(pam_3$clustering))
+
+pamclust4 %>% ggplot(aes(Primary_Setpoint,Secondary_Setpoint,
+                        color=cluster)) + geom_point() + ggtitle("PAM Clustering Plot") + theme(plot.title = element_text(hjust = 0.5)) 
+```
+
+The plot above is a result of PAM clustering. The plot clusters Primary SetPoint and Secondary Setpoint. It seems that there isn't a large distance between the clusters and there isn't small distance within the clusters either. As a result, this data cluster doesn't have much to offer. However, I want to see all possible clusters! If I want to see all possible cluster combinations as plots, I can use ggpairs().With ggpairs(), I can color the points by Failure_Type and see if the unsupervised machine learning model was able to group them on its own .  
+
+```{r}
+library(GGally)
+pamclust4 %>% mutate_all(as.numeric) -> pamclust4
+ggpairs(pamclust4,columns=1:4 ,aes(color=as.factor(rodPumpScale$Failure_Type)))
+```
+
+
+```{r}
+pam_3$silinfo$avg.width
+```
+
+The average silhouette width is 0.125. According to the goodness of fit criteria, this means "no substantial structure has been found". This means that with PAM clustering method, there probably isn't a hidden pattern or group within the data. However, this isn't necessairly a bad thing! Does this indicate that the individual means of each column are different from each other? Possibly, but are they statistically different and significant from each other? We can determine that by using ANOVA and hypothesis test simulations. There is one thing we are forgetting. We didn't use the categorical variables in the PAM clustering. Usually clustering methods only allow numerics, but using what's known as the "Gower Dissimilarity". The Gower allows you to be able to tell how similar the categorical variables are to each other and to the numerical variables. PAM clustering with the Gower dissimilarity follows the same algorithm: scale numerical values, find the amount of clusters with the silloutte width, perform PAM and notice trends with an entire matrix of plots with ggpairs(). 
+
+#Clustering Methods: PAM with Gower
+
+```{r}
+dat1<-rodPump%>%mutate_if(is.character,as.factor)%>%column_to_rownames("Rod_ID")%>%
+  select(-Failure_Type)
+
+gower1<-daisy(dat1,metric="gower") 
+
+sil_width5<-vector()
+
+for(i in 2:15){  
+  pam_fit5 <- pam(gower1, diss = TRUE, k = i)  
+  sil_width5[i] <- pam_fit5$silinfo$avg.width  
+}
+```
+
+
+
+```{r,echo=FALSE}
+ggplot()+geom_line(aes(x=1:15,y=sil_width5))+scale_x_continuous(name="k",breaks=1:15)+
+  ggtitle("Silhouette Width by Number of Clusters") + theme(plot.title = element_text(hjust = 0.5))
+```
+
+By the plot above, it seems that 3 clusters should be chosen for this data because the highest point in the plot is at k = 3. Now, PAM clustering can be performed and the results can be plotted.  
+
+```{r}
+pam10 <- pam(gower1, k = 3, diss = T) #tell pam you are using dissimilarities
+```
+
+The Gower can tell you statistics with categoricals such as the following, "Which 2 rod pumps are the most 'similar' and 'different' according to the Gower?" It uses euclidean distance between and within groups. 
+
+```{r}
+gower1%>%as.matrix%>%as.data.frame%>%rownames_to_column%>%
+  pivot_longer(-1,values_to="distance")%>%
+  filter(rowname!=name)%>%filter(distance%in%c(min(distance),max(distance)))%>%
+  distinct(distance,.keep_all = T)
+```
+
+Using ggpairs(), we can see a matrix of all possible plots of PAM clustering with the Gower Dissimilarity for categoricals. 
+
+```{r}
+pamclust5 <- dat1 %>% mutate(cluster=as.factor(pam10$clustering))
+
+pamclust5 %>% mutate_all(as.numeric) -> pamclust5
+
+ggpairs(pamclust5,columns=1:3 ,aes(color=as.factor(rodPumpScale$Failure_Type))) 
+
+```
+
+```{r}
+pam10$silinfo$avg.width 
+```
+
+Colored the cluster by failure type and attempted to see if the cluster grouped and separated by themselves into failure type. It seems that most of the variables aren’t clustering into their failure types automatically. Notice, the plots involving the categorical variables. The Gower Dissimilarity allows for categoricals to be placed in a PAM model by “dummy” coding 0,1,,etc. for each category within the variable. However, that was a 4 x 4 matrix of plots and we have 30 variables. Cannot plot a 30 x 30 matrix that is legible. Instead, we use the silhouette width criteria. The average silhouette width is 0.174. According to the goodness of fit criteria, this means "no substantial structure has been found". This means that with PAM clustering method, there probably isn't a hidden pattern or group within the data. However, as previously said, this isn't necessairly a bad thing. It indicates the the variables are different from each other and possibly a different method can find a pattern. 
+
+# PCA Dimensionality Reduction
+
+PCA is a mathematical procedure that reduces the number of variables in your dataset and reveals the underlying structure of the dataset's variance. The "Principle Components (PC's)" are the vectors pointed in the direction of where the data is most spread out (i.e highest variance). PCA takes the number of correlated variables and finds combinations that retain *most* of the information but are *uncorrelated* with each. As a result, a large dataset with many variables is reduced to a smaller number of PC's. What's the direction of the highest variance then? PC1's direction of highest variance will be the line that is perpendicular to the residuals, and PC2 will be perpendicular to PC1 and so on. In R, there is a single function we can run to perform PCA on our scaled numerical variables.  
+
+```{r,echo=FALSE}
+
+PCA_dat <- rodPump %>% select(-Rod_ID,-Failure_Type,-BHA_Configuration,-Wellbore_category,-Packer_vs_Tac,-Rod_Sinker_Type,-Rod_Make,-De_Sand_Company)
+
+Rodnums <- PCA_dat %>%  mutate(Pump_Bore = as.numeric(as.character(Pump_Bore))) %>% mutate_if(is.numeric, scale) %>% filter_all(is.finite)
+
+
+rownames(PCA_dat) <- Rodnums$Rod_ID
+PCA <- princomp(Rodnums)  
+
+```
+
+To determine which PC's to keep, there are 2 criteria: Kaisser's Rule (Eigenvalues > 1) or Cumulative Proportion of Variance Until > 80%. 
+
+```{r}
+eigval <-  PCA$sdev^2
+eigval
+```
+
+If we follow the Cumlative Proportion of Variance rule, PC 1:11 are chosen. 
+
+```{r}
+round(cumsum(eigval)/sum(eigval),2) #cumulative proportion of variance
+```
+
+If we follow Kaiser's Rule, PC 1:8 are chosen. I will choose Kaiser's Rule for the rest of my PC analysis. 
+
+```{r}
+
+roddf <-  data.frame(PC1=PCA$scores[, 1], PC2=PCA$scores[, 2],PC3=PCA$scores[, 3],
+                     PC4=PCA$scores[, 4],PC5=PCA$scores[, 5],PC6=PCA$scores[, 6],
+                     PC7=PCA$scores[, 7],PC8=PCA$scores[, 8])
+
+Rod_PC <- rodPump %>%
+  mutate(PC1=PCA$scores[, 1], PC2=PCA$scores[, 2],PC3=PCA$scores[, 3],
+         PC4=PCA$scores[, 4],PC5=PCA$scores[, 5],PC6=PCA$scores[, 6],
+         PC7=PCA$scores[, 7],PC8=PCA$scores[, 8]) %>% mutate(Cluster=pamclust5$cluster) 
+
+
+ggplot(Rod_PC, aes(PC1, PC2)) + geom_point(aes(color=Failure_Type)) + 
+  stat_ellipse(data=Rod_PC[Rod_PC$PC1>  5.0, ], aes(PC1, PC2), color="blue") + 
+  stat_ellipse(data=Rod_PC[Rod_PC$PC1< -5, ], aes(PC1, PC2), color="blue") + 
+  stat_ellipse(data=Rod_PC[Rod_PC$PC2> 4.1, ], aes(PC1, PC2), color="red") + 
+  stat_ellipse(data=Rod_PC[Rod_PC$PC2< -4.7, ], aes(PC1, PC2), color="red")
+
+```
+
+Notice how the Rod Pumps were high in PCA 1 and PCA 2, the failure was in the tubing, while if they were low in PCA 1 and PCA 2, the failure was in the sucker rod. What variables make up those PC’s? 
+
+```{r}
+PCA$loadings[1:7, 1:2] %>% as.data.frame %>% rownames_to_column %>% 
+ggplot() + geom_hline(aes(yintercept=0), lty=2) + 
+  geom_vline(aes(xintercept=0), lty=2) + ylab("PC2") + xlab("PC1") + 
+  geom_segment(aes(x=0, y=0, xend=Comp.1, yend=Comp.2), arrow=arrow(), col="red") + 
+  geom_label(aes(x=Comp.1*1.1, y=Comp.2*1.1, label=rowname))
+
+```
+
+Those 7 variables all positively contribute to PC1 and PC2. Secondary Setpoint and max_unguided DLS negatively contribute to PC2. The angles between vectors will tell the correlation between categories within a PC. The closer the vectors, the greater their correlation is within the PC’s.  
+Angle < 90 = Positive correlation between categories  
+Angle > 90 = Negative correlation between categories  
+High correlations between Pump_Fillage and Gross_StrokeLength. However, this is only 1 plot from the results! Ideally, I want to automate the process of finding the ideal ellipse based on failure type and display the loading vectors. That can be found finding a loop of PCA Biplots.
+
+```{r}
+library(factoextra)
+
+empty_list = list()
+k= 1
+for (i in 1:8){
+  for(j in 2:8){
+    if (i < j){
+       
+      empty_list[[k]] = fviz_pca_biplot(PCA,
+          axes=c(i,j),
+          addEllipses = T,
+          ellipse.level=0.95,
+          habillage = as.factor(Rod_PC$Failure_Type),
+          label="var",
+          col.var="black",
+          labelsize=3,
+          pointsize=1,
+          ggtheme = theme_minimal(),
+          legend.title="Failure Type") + coord_fixed() + ggtitle("PCA - Biplot") + 
+        theme(plot.title = element_text(hjust = 0.5),legend.position = "bottom")  
+      k=k+1
+      }
+}
+}
+empty_list[[1]]
+empty_list[[3]]
+```
+
+The PCA Biplot loops returns every relevent plot for the combinations of PCA's, automatically groups the points by failure type with colored ellipses, and displays the loading vectors. The loop returned 28 plots. However, the first few PC's explain the most variabilty, which is shown as a percentage on the x and y axis. As a result, PC1 by PC2 Biplot explains the most variabilty as a combination. PC1 explains 19.6% variabilty and PC2 explains 11.2% variability. 
+
+From the PC1 by PC2 biplot, if the data is negative in PC1 but positive in PC2, Avg_water_SG is driving the sucker rod failure. Additionally, if the data is negative in both PC's, then Lifespan_days is driving the sucker rod failures. Lifespan and Avg_Water_SG are potential causes/indicators of sucker rod failure. While it seems that if your positive in both PC's, Avg_Pressure_Casing, Avg_Pressure_Tubing, Avg_Oil_Volume, Avg_Water_Volume, Avg_Pressure_Flowline, Pump_Bore, and Stroke_Length have the longest vectors that are contributing to Tubing failure. If your positive in PC1 but negative in PC2, Rods failure is likely with Max_Unguided_DLS, DLS_High_in_Hole, Max_Sideload. 
+
+Usually, the first few plots are the most useful because the first few PC's have the largest variability. Plot 1 and Plot 3 have the most useful information. Their trends repeat in other plots or some plots are difficult to see any noticeable correlation. In Plot 3, Lifespan and Water_SG contribute to Sucker Rod Pump failure. Nipple_Set_Depth, Route, and Yesterday_Avg_SPM contribute to Rods failure. 
+
+
+# Multinomial Logistical Regression with 10 Fold Cross Validation and LASSO
+
+A multinomial logistical regression is a supervised model that will model the probability of a multinomial outcome (i.e. greater than 2).  The model will attempt to predict the three failure types using the other variables in the dataset. Multinomial logistical regression finds the odds/risk ratios of failure based on probability. LASSO is a method that enhances prediction accuracy and leads to more interpretable models by finding the variables in the dataset that contribute most to failure. K-fold cross validation is a supervised method in which the data is partitioned into two parts: the training and testing set. From there, the model trains one set with the data and tests the data against the other set. We repeat this for many partitions and find the average prediction performance on that. 10-fold CV divides the data into 10 parts and uses 9 parts as the training set and 1 as the testing set. 10-fold CV repeats this process 10 times. The purpose of cross validation is to test the models's ability to make predictions on **new** data that was **not** used to estimate it.
+
+We want to create a multinomial logisitcal regression model that can predict the 3 types of rod pump failure using the rest of the variables in the dataset.
+
+In a new dataset, create a new variable called "y" to assign numerics for the failure types. 
+
+* Sucker Rod Pump = 0
+* Rods = 1 
+* Tubing = 2
+
+Remove "Rod_ID", "Failure_Type", "Rod_Make", and "De-Sand Company" from that, and perform multinomial logistical regression on all the variables in that dataset. Those variables are removed because they either cause errors due to having a standard deviation of 0, overload the regression with to many variables, or the model response variable ("y") is based on that variable (Failure_Type). I ran a LASSO away from this file and these variables don't impact the LASSO anyway.  
+
+```{r}
+library(nnet)
+
+data1 <- rodPump %>% mutate(y=ifelse(Failure_Type=="Sucker Rod Pump",0,ifelse(Failure_Type=="Rods",1,2))) %>% select(-Rod_ID,-Failure_Type,-Rod_Make,-`De_Sand_Company`)
+
+multi <- multinom(y~.,data=data1)
+
+```
+
+Below, the p-values of the model are shown.
+
+```{r}
+#pvals
+z <- summary(multi)$coefficients/summary(multi)$standard.errors
+(1-pnorm(abs(z)))*2
+```
+
+To get the classification statistics from the confusion matrix (F1, true-positive rate, false-positive rate,etc.), I created a function called "class_diags", which takes in the multinomial regression and the response truth variable . 
+
+```{r}
+class_diag <- function(multi,truth){
+  
+  tab <- table(pred=predict(multi,type="class"),truth) %>% addmargins
+ 
+  colsum1= tab[1,1] + tab[2,1] + tab[3,1]
+  colsum2= tab[1,2] + tab[2,2] + tab[3,2]
+  colsum3= tab[1,3] + tab[2,3] + tab[3,3]
+  colTotal= colsum1 + colsum2 + colsum3
+  
+  rowsum1= tab[1,1] + tab[1,2] + tab[1,3]
+  rowsum2= tab[2,1] + tab[2,2] + tab[2,3]
+  rowsum3= tab[3,1] + tab[3,2] + tab[3,3]
+  
+  acc= (tab[1,1] + tab[2,2] + tab[3,3])/(colTotal) #accuracy
+    
+ #recall or sensitivity
+  sens_suck=tab[1,1]/colsum1
+  sens_rod=tab[2,2]/colsum2
+  sens_tub=tab[3,3]/colsum3
+
+  weight_sens=((colsum1/colTotal)*sens_suck)+
+    ((colsum2/colTotal)*sens_rod)+ 
+    ((colsum3/colTotal)*sens_tub)
+  
+   #precision  
+  ppv_suck=tab[1,1]/rowsum1
+  ppv_rod=tab[2,2]/rowsum2 #precision
+  ppv_tub=tab[3,3]/rowsum3
+
+  weight_ppv=((colsum1/colTotal)*ppv_suck)+
+    ((colsum2/colTotal)*ppv_rod)+ 
+    ((colsum3/colTotal)*ppv_tub)
+  
+  #F1
+  F1_suck=(2*ppv_suck*sens_suck)/(ppv_suck+sens_suck)
+  F1_rod=(2*ppv_rod*sens_rod)/(ppv_rod+sens_rod)
+  F1_tub=(2*ppv_tub*sens_tub)/(ppv_tub+sens_tub)
+  
+  #overall F1
+  tp=tab[1,1]+tab[2,2]+tab[3,3]
+  fp=tab[1,2]+tab[1,3]+tab[2,1]+tab[2,3]+tab[3,1]+tab[3,2]
+  fn=fp
+  F1_overall=tp/(tp+(0.5*(fn+fp)))
+  F1_weighted=(2*weight_ppv*weight_sens)/(weight_ppv+weight_sens)
+
+  
+  data.frame(acc,sens_suck,sens_rod,sens_tub,ppv_suck,ppv_rod,ppv_tub,F1_suck,F1_rod,F1_tub,
+             weight_sens,weight_ppv,F1_weighted,tp,fp,fn,F1_overall)
+  
+}
+```
+
+The confusion matrix for the multinomial logistical regression is shown below. 
+
+```{r}
+#predictions and classify
+probs <- predict(multi,type="probs")
+table(pred=predict(multi,type="class"),truth=data1$y) %>% addmargins
+```
+
+Using "class_diags", the following classification statistics are found. 
+
+```{r}
+class_diag(multi,data1$y)
+```
+
+I'll focus primarily on the "overall_F1", which is the weighted average between the precision (i.e. the proportion of correctly predicted from the model) and sensitivity (i.e. true positive rate). The F1 is 0.68125. Ideally, a model with a F1 score of 1 is the goal. Using LASSO, we can predict the variables that contribute to the multinomial regression the most. However, before LASSO is ran, we must determine the ideal lambda value for the LASSO model. 
+
+
+```{r}
+library(glmnet)
+
+y1 <- as.matrix(data1$y)
+
+fail_preds1 <- model.matrix(y~.,data=data1)[,-1]  #predictors
+fail_preds1 <- scale(fail_preds1)
+
+cv <- cv.glmnet(fail_preds1,y1,family="multinomial",type.multinomial="grouped",parallel = TRUE)
+plot(cv)
+
+```
+
+The plot above shows the multinomial deviance by the log base 10 of lambda. The best lambda maximizes the 10 fold cross-validation that will occur next. It is slightly subjective in which position is the "best" lambda. Most data engineers agree that either the global minimum of the curve above or 1 standard error above that minimum is the ideal position for lambda. I will use the minimum of the curve above as the lambda value. 
+
+```{r}
+lasso_fit1 <- glmnet(fail_preds1,y1,family="multinomial",lambda = cv$lambda.min)
+coef(lasso_fit1) #min
+```
+
+From the LASSO, the following variables contribute to the multinomial regression the most.  
+
+For Sucker Rod Pump failure:   
+* Primary_Setpoint                    
+* Stroke_Length                       
+* BHA_ConfigurationPACKER_TAC_DONNAN  
+* Packer_vs_TacOTHER_PACKER           
+* Avg_Pressure_Flowline               
+* Avg_Pressure_Tubing                  
+* Nipple_Set_Depth                    
+* Pump_Bore                           
+    
+For Rods failure:   
+* Primary_Setpoint                       
+* Gross_StrokeLength                   
+* Yesterdays_Avg_SPM                   
+* BHA_ConfigurationTAC_ABOVE_NIP        
+* Wellbore_categoryOffLease          
+* Wellbore_categoryVertical            
+* Packer_vs_Tachornet                   
+* Avg_Pressure_Flowline                
+* Rod_Sinker_TypeSLICK_SINKER_BARS       
+* Rod_Sinker_TypeSUCKER_RODS_W_GUIDES   
+* Rod_Sinker_TypeUNKNOWN               
+* Nipple_Set_Depth                     
+  
+For Tubing failure:           
+* Gross_StrokeLength                   
+* Pump_Fillage                          
+* BHA_ConfigurationTAC_ABOVE_NIP        
+* Max_Unguided_DLS                      
+* Gas_Anchor_Length                    
+* Wellbore_categoryOffLease              
+* Wellbore_categoryVertical             
+* Packer_vs_Tachornet                  
+* Packer_vs_TacOTHER_PACKER             
+* Avg_Differential_Pressure              
+* Avg_Oil_Volume                         
+* Avg_Water_Volume                       
+* Avg_Water_SG                          
+* Rod_Sinker_TypeSLICK_SINKER_BARS     
+* Route                                 
+      
+Using these variables above, perform 10 fold cross validation with a multinomial logistic regression. 
+
+```{R warning=F,message=F}
+
+set.seed(1234)
+k=10
+
+dat <- data1 %>% 
+  mutate(BHA_ConfigurationPACKER_TAC_DONNAN=ifelse(data1$BHA_Configuration=="PACKER_TAC_DONNAN",1,0),
+         BHA_ConfigurationTAC_ABOVE_NIP=ifelse(data1$BHA_Configuration=="TAC_ABOVE_NIP",1,0),
+         Packer_vs_TacOTHER_PACKER=ifelse(data1$Packer_vs_Tac=="OTHER_PACKER",1,0),
+         Packer_vs_Tachornet=ifelse(data1$Packer_vs_Tac=="hornet",1,0),
+         Wellbore_categoryOffLease=ifelse(data1$Wellbore_category=="OffLease",1,0),
+         Wellbore_categoryVertical=ifelse(data1$Wellbore_category=="Vertical",1,0),
+         Rod_Sinker_TypeSLICK_SINKER_BARS=ifelse(data1$Rod_Sinker_Type=="SLICK_SINKER_BARS",1,0),
+         Rod_Sinker_TypeSUCKER_RODS_W_GUIDES=ifelse(data1$Rod_Sinker_Type=="SUCKER_RODS_W_GUIDES",1,0),
+         Rod_Sinker_TypeUNKNOWN=ifelse(data1$Rod_Sinker_Type=="UNKNOWN",1,0))
+
+data <- dat %>% sample_frac #put rows of dataset in random order
+folds <- ntile(1:nrow(data),n=10) #create fold labels
+
+diags <- NULL
+for(i in 1:k){
+  train <- data[folds!=i,] #create training set (all but fold i)
+  test <- data[folds==i,] #create test set (just fold i)
+  truth <- test$y #save truth labels from fold i
+  
+  fit <- multinom(y~Primary_Setpoint+
+                    Avg_Pressure_Flowline+
+                    Avg_Pressure_Tubing+
+                    BHA_ConfigurationPACKER_TAC_DONNAN+
+                    Packer_vs_TacOTHER_PACKER+
+                    Nipple_Set_Depth+
+                    Pump_Bore+
+                    Gross_StrokeLength+
+                    Yesterdays_Avg_SPM+
+                    Wellbore_categoryOffLease+
+                    Wellbore_categoryVertical+
+                    Packer_vs_Tachornet+
+                    Rod_Sinker_TypeSLICK_SINKER_BARS+
+                    Rod_Sinker_TypeSUCKER_RODS_W_GUIDES+
+                    Rod_Sinker_TypeUNKNOWN+
+                    BHA_ConfigurationTAC_ABOVE_NIP+
+                    Max_Unguided_DLS+
+                    Gas_Anchor_Length+
+                    Avg_Differential_Pressure+
+                    Avg_Oil_Volume+
+                    Avg_Water_Volume+
+                    Avg_Water_SG+
+                    Route,data=train)
+  
+  probs <- predict(fit,newdata=test,type="probs")
+  #diags<-rbind(diags,class_diag(fit,truth))
+  diags[i] <- list(table(pred=predict(fit,newdata = test,type="class"),truth=truth) %>% addmargins )
+}
+
+```
+
+The 10 fold CV results in 10 different confusion matricies. I created a function called "add" that will combine all matricies and then use "class_diags" to get the resulting classification statistics. 
+
+```{r}
+add <- function(x) Reduce("+", x)
+add(diags)
+```
+
+The overall F1 is 0.61. The F1 score decreases after LASSO and 10-fold CV. This isn't ideal. I think this occured because there were some variables predicted by the LASSO for either 1 or 2 types of failure, rather than all 3. As a result, this variable can cause false positives for that failure type, since the model will apply that variable for all 3 failure type predictions. From the model, the Tubing failure is the only prediction that was well made. It had a recall (true-positive rate) of 0.82 and  precision of 0.67. The plot below shows a visual representation of the logistic model. Ideally, if there is no overlap in the density plot, that means that the model predicted perfectly. If there is overlap, that indicates there are false-positives. It's easier to see the all of the overlap on the dashboard. 
+
+
+```{r}
+data2 <- data1
+data2$logit <- predict(multi)
+
+data2 %>% mutate(Failure_Type=ifelse(y==0,"Sucker Rod Pump",
+                                     ifelse(y==1,"Rods","Tubing"))) -> data2
+
+ #get predicted log-odds (logits)
+
+#plot logit scores for each truth category
+
+data2 %>% mutate(outcome=factor(Failure_Type,levels=c("Sucker Rod Pump","Rods","Tubing"))) -> data2
+
+ggplot(data2, aes(logit, fill=outcome))+geom_density(alpha=.3,) +
+  geom_vline(xintercept=0,lty=2)
+  
+```
+
+

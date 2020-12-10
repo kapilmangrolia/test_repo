@@ -1,0 +1,666 @@
+---
+title: 'Project 2: Modeling, Testing, and Predicting'
+author: "SDS348 - Fall 2020"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output:
+  html_document:
+    toc: yes
+    toc_float:
+      collapsed: no
+      smooth_scroll: yes
+  pdf_document:
+    toc: no
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, eval = TRUE, fig.align = "center", warning = F, message = F,
+tidy=TRUE, tidy.opts=list(width.cutoff=60), R.options=list(max.print=100))
+```
+
+Kapil Mangrolia  
+EID: kvm386
+
+## **Introduction**
+
+The dataset is called "lakers" and is tidy and built into R. Lakers is a dataset that contains play by play statistics on the 2008-2009 Los Angeles Lakers. The 2008-2009 Los Angeles Lakers won an NBA Championship that year in a dominant and efficient manner. As a result, they are a great team to individually analyze. The dataset contains 34,624 rows and 13 columns. The data columns include the date, accronym of the opponent, and type of game (home/away game). From there, the dataset describes the each individual play from every game that season. The other 9 columns are the quarter and time when a play was made, how they got the ball, the team with the ball, player name, shot result (make/missed), type of shot, points resulted from the shot, and the x/y coordinates on the court in which the ball was shot from. 
+
+```{r}
+library(lubridate)
+library(tidyverse)
+glimpse(lakers)
+```
+
+## *MANOVA*
+
+```{r}
+lakers %>% as.data.frame %>% na.omit -> lakers
+
+man1<-manova(cbind(points,x,y)~opponent, data=lakers)
+summary(man1)
+```
+
+Removing the NA's in the lakers dataset removes the scenarios in which the ball wasn't shot. It removes the plays in which the player rebounded, shot a free throw, fouled, turned the ball over, called a timeout, or subbed out. Since the p-value of the overall MANOVA is < 0.01, the MANOVA tells you that the means of the response variables (x, y, points) differ by opponent (i.e the null hypothesis is rejected). Which response variable mean actually differs by opponent?
+
+```{r}
+summary.aov(man1)
+```
+
+From the ANOVA test, only the "y" p-value are significant (very small; < 0.01), so the mean y-position differs from the opponent. However, we don't know which opponents until the post-hoc t-test.
+
+```{r}
+pairwise.t.test(lakers$y,lakers$opponent, p.adj="none")
+
+(((29^2)-29)/2)+29 #number of t-test done (number of opponents = 29) 
+#Above is the equation for elements under the diagonal for matrix + length of diagonal
+
+
+```
+
+Many t-test were performed here. Specifically, there was 1 MANOVA, 3 ANOVA's, and 465 t-tests, which in total are 469 hypothesis tests. From inspection, there were over 70 hypothesis tests in which the p-value was < 0.05 and the null hypothesis was rejected. However, due to the nature of probability, there is a possibility of type 1 error (false-positives). We can calculate the probability of type 1 error and apply the bonferroni correction, which then allows us to keep the overall type 1 error rate at 5%. 
+
+```{r}
+typ1 <- 1-(0.95^435) #prop of type 1 error
+typ1
+bonf <- 0.05/435 #bonferroni
+bonf
+pairwise.t.test(lakers$y,lakers$opponent, p.adj="none")
+```
+
+The probability of type 1 error is 1. There will be a false-positive in the t-testing. The bonferroni correction is 0.0001149425. This is new significance level that will keep the overall type 1 error rate at 5%. From inspection of the above t-tests, there are now only 2 p-values < 0.0001149425. This can be interpretted as the difference in mean y-position of shots taken on the court is significant between OKC (Oklahoma City Thunder) : ORL (Orlando Magic) and ORL : UTA (Utah Jazz). However, initially when we performed an MANOVA, many assumptions were made. 
+
+```{r}
+library(rstatix)
+
+group <- lakers$opponent 
+DVs <- lakers %>% select(points,x,y)
+
+#Test multivariate normality for each group (null: assumption met)
+sapply(split(DVs,group), mshapiro_test)
+
+#If any p<.05, stop (assumption violated). If not, test homogeneity of covariance matrices
+
+#Box's M test (null: homogeneity of vcov mats assumption met)
+box_m(DVs, group)
+
+#Optionally View covariance matrices for each group
+
+#lapply(split(DVs,group), cov)
+```
+
+When the multivariate normality assumption is tested, many of the resulting p-values are < 0.05. As a result, the null hypothesis is rejected which means that the response variables (points, x, and y) are do NOT have multivariate normality. The p-value of the box_m test is 2.82e-05 which is < 0.05. As a result, the null hypothesis is rejected, which means that there is NOT homogeneity within-group covariance matrices. The assumptions to perform a MANOVA were not met. 
+
+## **Randomization Test**
+
+I will create a randomization test for a One-Way ANOVA. The null hypothesis is the following: The mean x-position of shots taken on the court by the Lakers is the same when playing against any opponent. The alternative hypothsis is the opposite of the null: The mean x-position of shots taken on the court by the Lakers is differnt when playing different opponents. Initially, I must find the observed F-statistic to eventually compare to the simulated F-statistic. 
+
+```{r}
+#calculation of observed F-statistic
+
+SSW_ob <- lakers %>% group_by(opponent) %>% summarize(SSW=sum((x-mean(x))^2)) %>% 
+  summarize(sum(SSW)) %>% pull
+
+SSB_ob <- lakers %>% mutate(grand_mean=mean(x)) %>% group_by(opponent) %>% 
+  mutate(group_mean=mean(x)) %>% summarize(SSB=sum((grand_mean-group_mean)^2)) %>% 
+  summarize(sum(SSB)) %>% pull 
+
+obs_F <- (SSB_ob/12)/(SSW_ob/13054) # k = columns -1 = 13 -1; df = rows - k = 13067 - 13
+
+```
+
+Using "sample", I can take random samples of the x-position, which can be used in loop to calculate the F-statistic repeatedly. 
+
+```{r}
+
+Fs <- replicate(5000,{
+
+new <- lakers %>% mutate(x=sample(x))
+
+SSW <- new %>% group_by(opponent) %>% summarize(SSW=sum((x-mean(x))^2)) %>% 
+  summarize(sum(SSW)) %>% pull
+
+SSB <- new %>% mutate(grand_mean=mean(x)) %>% group_by(opponent) %>% 
+  mutate(group_mean=mean(x)) %>% summarize(SSB=sum((grand_mean-group_mean)^2)) %>% 
+  summarize(sum(SSB)) %>% pull 
+
+(SSB/12)/(SSW/13054)
+})
+
+```
+
+
+```{r}
+Fs_df <- Fs %>% as.data.frame
+
+ggplot(Fs_df,aes(x=.))+geom_histogram() + xlab("Fs") + ylab("Density") + 
+  ggtitle("Histogram of F's") + geom_vline(xintercept = obs_F,color="red") + 
+  theme(plot.title = element_text(hjust = 0.5))
+
+
+```
+
+```{r}
+mean(Fs>obs_F) #p-value
+mean(Fs)
+```
+
+The p-value of the F-test is 0.3716. That p-value isn't very small so as a result, the null hypothesis is accepted. Additionally, the mean of the randomized F-stat was 2.331. When the F-statistic is large, the null is rejected. However, our randomized F-stat was very small so that further affirms that the null hypothesis is accepeted. 
+
+## **Linear Regression Model**
+
+```{r}
+
+library(lmtest)
+library(sandwich)
+
+lakers$x_c <- lakers$x - mean(lakers$x,na.rm=T) #mean center the numerics
+lakers$y_c <- lakers$y - mean(lakers$y,na.rm=T)
+
+  
+fit <- lm(x_c ~ game_type * y_c, data = lakers)
+summary(fit)
+
+```
+
+Interpretting the coefficients of the above linear regression: 
+
+Intercept: Predicted x-position of when a basket is scored, at the y-position of 0 on the court and at an away game is -0.05489.
+
+game_typehome: Controlling for y-position, x-position when a basket is scored is 0.10132 higher for home games compared to away games. 
+
+y_c: Controlling for game type, for every 1 unit increase in y-position, x-position decreases by 0.03236.
+
+game_typehome:y_c: The slope for y-position on x-position is 0.04427 greater for home games compared to away games.  
+
+```{r}
+
+ggplot(lakers,aes(y_c,x_c,color=game_type))+geom_smooth(method="lm",se=F,fullrange=T)+
+  geom_point() + ggtitle("Linear Regression on Positions of Shots") + 
+  theme(plot.title = element_text(hjust = 0.5))
+
+```
+
+The assumptions of a linear regression are that at any point the data and it's residuals are normally distributed (normality), an even scatter (i.e. equal variance) of points as the regression line increses (homoskedasticity), and linear relationship between each X predictor and the response Y. Notice from the plot above,the trendline doesn't accuratly follow the data so the linear assumption between the predictors and response variable are rejected. The Breush-Pagan test below tests homoskedasticity. 
+
+Check assumptions of linearity, normality, and homoskedasticity either graphically or using a hypothesis test (4)
+
+```{r}
+bptest(fit)
+```
+
+Once the Breuch-Pagan test was ran, the p-value was < 2.2e-16, which is less than 0.05. As a result, the null hypothesis of homoskedasticity is rejected and heteroskedasticity is assumed (i.e the data points fan outwards). 
+
+```{r}
+resids <- fit$residuals
+ks.test(resids,"pnorm",mean=0,sd(resids))
+```
+
+According to the One-Sample Kolmogorow-Smirnov Test, the p-value is < 2.2e-16 which is less than 0.05. As a result, the null hypothesis of the data points/residuals being normally distributed is rejected so the alternative hypothesis is accepted. The alternative hyportheis is that there is difference between the observed and theoretical distrubution of the data points/residuals. Even though some assumptions weren't met, we will still recalculate the linear regression with robust standard errors.
+
+```{r}
+coeftest(fit, vcov = vcovHC(fit)[,1:4])
+```
+
+After using robust standard errors,the p-values for all predictor variables decreased. However, only the p-values for y-position and the interaction "game_typehome:y_c" were < 0.05, which indicates that they are statistically significant to the prediction of the response variable (x_c). Prior to the robust standard errors, only y-position (y_c) was statistically significant (p value < 0.05). Additionally, once robust standard errors were applied the standard error for
+y_c and game_typehome:y_c decreased while game_typehome standard error increased. 
+
+Initially, the standard error were as follows: 
+- game_typehome (SE) = 0.19574
+- y_c (SE) = 0.01641 
+- game_typehome:y_c (SE) = 0.02262
+
+After the robust standard errors were applied: 
+- game_typehome (SE) =  0.195847
+- y_c (SE) = 0.015170
+- game_typehome:y_c (SE) = 0.021320
+
+Lastly, the proportion of variation is found below. 
+
+```{r}
+summary(fit)
+```
+
+The proportion of the variation in the response variable, x-position, explanined by the overall model is the adjusted R^2 value: 0.0001317. 
+
+```{r}
+samp_distn <- replicate(5000,{
+  
+  boot_dat <- sample_frac(lakers, replace=T) #bootstrap sample of rows
+  fit <- lm(x_c ~ game_type * y_c, data = boot_dat)
+  coef(fit)
+})
+
+#estimated SE's using bootstrapping
+samp_distn %>% t %>% as.data.frame %>% summarize_all(sd)
+
+```
+
+With bootstrapped standard errors, the standard error for game_typehome increased while y_c and game_typehome:y_c SE's decresed. 
+
+Bootstrapped standard errors: 
+- game_typehome (SE) =  0.1962148
+- y_c (SE) = 0.01513994
+- game_typehome:y_c (SE) = 0.02087231
+
+The p-values probably didn't change immensely due to these slight vhanges in SE. It probably followed the same trends as before which were that the p-value for y_c and game_typehome:y_c decrease while the p value for game_typehome increase. 
+
+
+## **Logistic Regression**
+
+```{r}
+
+lakers %>% mutate(y_res=ifelse(result=="made",1,0)) -> lakers
+
+fit2<-glm(y_res~x+y+game_type, data=lakers, family="binomial")
+exp(coef(fit2))
+```
+
+The odds of a made basket on the court for away games on the court is 1.394. Controlling for y-position and game type, for every one additional increase in x-position on the court, the odds of a made basket increase by a factor of 1.004. Controlling for x-position and game type, for every one additional increase in y-position on the court, the odds of a made basket increase by a factor of 0.9653. Controlling for position, the odds of a made basket at a home game is 0.9347 times the odds of a made basket at an away game.  
+
+```{r}
+probs <- predict(fit2,type="response") #predicted probability from model
+pred <- ifelse(probs>0.5,1,0)
+table(prediction=pred, truth=lakers$y_res) %>% addmargins
+```
+
+```{r}
+library(plotROC)
+accuracy <- (4305 + 3273)/13067
+accuracy
+
+sensitivity <- 3273/6009
+sensitivity
+
+specificity <- 4305/7058
+specificity
+
+precision <- 3273/6026
+precision
+
+ROCplot1 <- ggplot(lakers) + geom_roc(aes(d=y_res,m=probs),n.cuts=0)
+
+calc_auc(ROCplot1)
+```
+
+The accuaracy is 0.5799, which is the proportion of correctly classified made or missed baskets of the logistic model. The model isn't a very accurate fit because the accuracy is very low. The sensitivity, rate of getting a true positive (made basket) from the model, is 0.5447. The specificity, rate of getting a true negative (missed basket) from the model, is 0.60995. The precision, proportion classified as a made basket when they actually are made baskets, is 0.54315. The area under the ROC curve (AUC) is 0.5937. According to our criteria for AUC, that is a bad AUC so overall the model isn't predicting made baskets well. 
+
+```{r}
+lakers$logit <- predict(fit2) #get predicted log-odds (logits)
+
+#plot logit scores for each truth category
+
+lakers %>% mutate(outcome=factor(result,levels=c("made","missed"))) %>% 
+  ggplot(aes(logit, fill=outcome))+geom_density(alpha=.3) +
+  geom_vline(xintercept=0,lty=2) +
+  ggtitle("Density Plot of Log-Odds") + 
+  theme(plot.title = element_text(hjust = 0.5)) + xlim(-1,1)
+```
+
+Notice the large overlap between made and missed. The model is very innaccurate at predicting made and missed baskets.
+
+```{r}
+ROCplot1 <- ggplot(lakers) + geom_roc(aes(d=y_res,m=probs),n.cuts=0) +
+  ggtitle("ROC Curve") + theme(plot.title = element_text(hjust = 0.5))
+ROCplot1
+calc_auc(ROCplot1)
+```
+
+The area under the ROC curve (AUC) is 0.5937. According to our criteria for AUC, that is a bad AUC so overall the model isn't predicting made baskets well. The trade off between false-positives and true-positives is very bad. This is affirmed by the density plot above as well. 
+
+## **Logistic Regression with LASSO and Cross-Validation**
+
+```{r}
+dat_test<-lakers%>%na.omit%>%select(-etype,-logit,-y_c,-x_c,-result,-points)
+dat_test$date<-ymd(dat_test$date)
+dat_test$time<-as.duration(ms(dat_test$time))
+fit6<-glm(y_res~.,data=dat_test,family="binomial")
+
+```
+
+I had to get rid of the column "etype" because it causes the "Error in Contrasts" in R. This occurs because it is a categorical but it only has 1 category in it, "shot". I also had to convert "date" to year-month-day format and convert time to a "duration" type. Also, "logit", "x_c", "y_c" were added into the dataset by myself earlier on so I removed those. I also removed "result" because "y_res" is "result" but in numerical form. I also took away "points". If I keep "points" and "results", the model will perfectly predict a made or missed basket regardless of cross validation or LASSO. Those variables literally say whether it was a made or missed shot. From here on, let's calculate the classification diagnostics. 
+
+```{r}
+
+class_diag <- function(probs,truth){
+  #CONFUSION MATRIX: CALCULATE ACCURACY, TPR, TNR, PPV
+  tab<-table(factor(probs>.5,levels=c("FALSE","TRUE")),truth)
+  acc=sum(diag(tab))/sum(tab)
+  sens=tab[2,2]/colSums(tab)[2]
+  spec=tab[1,1]/colSums(tab)[1]
+  ppv=tab[2,2]/rowSums(tab)[2]
+  f1=2*(sens*ppv)/(sens+ppv)
+
+  if(is.numeric(truth)==FALSE & is.logical(truth)==FALSE) truth<-as.numeric(truth)-1
+  
+  #CALCULATE EXACT AUC
+  ord<-order(probs, decreasing=TRUE)
+  probs <- probs[ord]; truth <- truth[ord]
+  
+  TPR=cumsum(truth)/max(1,sum(truth)) 
+  FPR=cumsum(!truth)/max(1,sum(!truth))
+  
+  dup<-c(probs[-1]>=probs[-length(probs)], FALSE)
+  TPR<-c(0,TPR[!dup],1); FPR<-c(0,FPR[!dup],1)
+  n <- length(TPR)
+  auc<- sum( ((TPR[-1]+TPR[-n])/2) * (FPR[-1]-FPR[-n]) )
+
+  data.frame(acc,sens,spec,ppv,f1,auc)
+}
+
+```
+
+
+```{r}
+
+probs3 <- predict(fit6,type="response")
+class_diag(probs3, dat_test$y_res)
+
+```
+
+The accuaracy is 0.510, which is the proportion of correctly classified made or missed baskets of the logistic model. The accuracy of the model is poor the accuracy is only slightly above 0.5. The sensitivity, rate of getting a true positive (made basket) from the model, is 0.7556. The specificity, rate of getting a true negative (missed basket) from the model, is 0.3015. The precision, proportion classified as a made basket when they actually are made baskets, is 0.4794. The area under the ROC curve (AUC) is 0.5285. According to our criteria for AUC, that is a bad AUC so overall the model is bad at predicting made baskets well. However, we can use a supervised model with 10 fold cross validation to see if the results improve/change.
+
+```{R warning=F}
+
+set.seed(1234)
+k=10
+
+data <- dat_test %>% sample_frac #put rows of dataset in random order
+folds <- ntile(1:nrow(data),n=10) #create fold labels
+
+diags<-NULL
+for(i in 1:k){
+  train <- data[folds!=i,] #create training set (all but fold i)
+  test <- data[folds==i,] #create test set (just fold i)
+  truth <- test$y_res #save truth labels from fold i
+  
+  fit <- glm(y_res~.,data=train,family="binomial")
+  #fit$xlevels[["player"]] <- union(fit$xlevels[["player"]], levels(test$player))
+  fit$xlevels[["type"]] <- union(fit$xlevels[["type"]], levels(as.factor(test$type)))
+  fit$xlevels[["player"]] <- union(fit$xlevels[["player"]], levels(as.factor(test$player)))
+  probs <- predict(fit,newdata=test,type="response")
+  
+  diags<-rbind(diags,class_diag(probs,truth))
+}
+
+summarize_all(diags,mean)
+
+```
+
+The accuaracy is 0.5608, which is the proportion of correctly classified made or missed baskets of the logistic model. The accuracy of the model is poor the accuracy is only slightly above 0.5. The sensitivity, rate of getting a true positive (made basket) from the model, is 0.566. The specificity, rate of getting a true negative (missed basket) from the model, is 0.556. The precision, proportion classified as a made basket when they actually are made baskets, is 0.5467. The area under the ROC curve (AUC) is 0.5892. According to our criteria for AUC, that is a poor AUC so overall the model is poor at predicting made baskets well.
+
+The classification diagnostics are have slightly improved with 10 fold CV. Let's perform a LASSO to dertermine the variables contributing to the above model diagnostics. 
+
+```{r}
+library(glmnet)
+set.seed(1234)
+
+y2 <- as.matrix(dat_test$y_res) #response
+
+laker_preds2 <- model.matrix(y_res~.,data=dat_test)[,-1] #predictors
+laker_preds2 <- scale(laker_preds2)
+
+
+cv2 <- cv.glmnet(laker_preds2,y2,family="binomial")
+lasso_fit2 <- glmnet(laker_preds2,y2,family="binomial",lambda = cv2$lambda.1se)
+
+#coef(lasso_fit2)
+
+#probs6 <- predict(lasso_fit2, laker_preds2, type="response")
+#class_diag(probs6, dat_test$y_res)
+
+```
+
+To determine the lambda required for the best possible LASSO, 1 standard error above the lambda that maximizes CV classification was chosen. Once the LASSO was performed, many variables were predicted to stay. Only a few "opponents' and "teams" were predictors of a made or basket according to the LASSO. LASSO predicted majority of the various ways to shoot the ball ("type"), the y-position on the court, time, period, and the many players who probably have a high shot percentage. This makes sense because the way to score a basket will change based on y-position on the court, who is shooting the ball, and the types of shots taken as the game goes on. For example, depending on there position, the player can take a jump shot, bank, slam dunk, etc.  After a LASSO was performed, the following variables are considered to have the greatest impact on the model:  
+      
+* opponentDEN                    
+* opponentPHX                     
+* opponentSAS                    
+* time                            
+* period                         
+* teamLAC                       
+* teamLAL                         
+* teamNJN                        
+* teamPOR                       
+* playerAndrew Bynum              
+* playerAnthony Carter          
+* playerBen Gordon               
+* playerCarl Landry               
+* playerCarmelo Anthony          
+* playerChuck Hayes              
+* playerCraig Smith               
+* playerDan Gadzuric             
+* playerDikembe Mutombo          
+* playerDonyell Marshall         
+* playerEarl Watson              
+* playerFabricio Oberto           
+* playerGrant Hill                
+* playerHamed Haddadi            
+* playerJamaal Magloire          
+* playerJameer Nelson             
+* playerJarrett Jack             
+* playerJason Collins            
+* playerJerryd Bayless           
+* playerJohn Salmons             
+* playerJordan Farmar            
+* playerKelenna Azubuike          
+* playerKevin Garnett            
+* playerKevin Ollie              
+* playerKobe Bryant               
+* playerKris Humphries           
+* playerKurt Thomas             
+* playerKyle Lowry               
+* playerLeBron James             
+* playerLuis Scola                
+* playerMario Chalmers           
+* playerMarquis Daniels          
+* playerMichael Beasley           
+* playerMickael Pietrus          
+* playerMorris Peterson           
+* playerNick Collison            
+* playerOleksiy Pecherov          
+* playerPau Gasol                 
+* playerPeja Stojakovic          
+* playerRandy Foye           
+* playerRodney Carney            
+* playerRussell Westbrook        
+* playerRyan Anderson            
+* playerSergio Rodriguez         
+* playerSun Yue                  
+* playerTracy McGrady            
+* playerTroy Murphy               
+* typealley oop dunk              
+* typealley oop layup             
+* typedriving bank                
+* typedriving dunk                
+* typedriving finger roll layup   
+* typedriving jump               
+* typedriving layup               
+* typedriving reverse layup       
+* typedriving slam dunk           
+* typedunk                        
+* typefade away bank              
+* typefade away jumper            
+* typefinger roll layup         
+* typefloating jump              
+* typehook bank                  
+* typejump                       
+* typejump bank                   
+* typejump hook                   
+* typepullup jump                 
+* typeputback dunk                
+* typeputback layup               
+* typeputback slam dunk           
+* typereverse dunk              
+* typereverse layup             
+* typereverse slam dunk           
+* typerunning bank                
+* typerunning dunk            
+* typerunning hook                
+* typerunning layup               
+* typerunning slam dunk          
+* typeslam dunk                   
+* typestep back jump             
+* typeturnaround bank             
+* typeturnaround bank hook        
+* typeturnaround fade away        
+* typeturnaround jump            
+* y                              
+
+```{R warning=F}
+
+set.seed(1234)
+k=10
+
+#making dummies for the categories 
+dat <- dat_test %>% mutate(opponentDEN=ifelse(dat_test$opponent=="DEN",1,0),
+                      opponentPHX=ifelse(dat_test$opponent=="PHX",1,0),
+                      opponentSAS=ifelse(dat_test$opponent=="SAS",1,0),
+                      teamLAC=ifelse(dat_test$team=="LAC",1,0),
+                      teamLAL=ifelse(dat_test$team=="LAL",1,0),
+                      teamNJN=ifelse(dat_test$team=="NJN",1,0),
+                      teamPOR=ifelse(dat_test$team=="POR",1,0),
+            `playerAndrew Bynum`=ifelse(dat_test$player=="Andrew Bynum",1,0),
+            `playerAnthony Carter`=ifelse(dat_test$player=="Anthony Carter",1,0),
+            `playerBen Gordon`=ifelse(dat_test$player=="Ben Gordon",1,0),
+            `playerCarl Landry`=ifelse(dat_test$player=="Carl Landry",1,0),
+            `playerCarmelo Anthony`=ifelse(dat_test$player=="Carmelo Anthony",1,0),
+            `playerChuck Hayes`=ifelse(dat_test$player=="Chuck Hayes",1,0),
+            `playerCraig Smith`=ifelse(dat_test$player=="Craig Smith",1,0),
+            `playerDan Gadzuric`=ifelse(dat_test$player=="Dan Gadzuric",1,0),
+            `playerDikembe Mutombo`=ifelse(dat_test$player=="Dikembe Mutombo",1,0),
+            `playerDonyell Marshall`=ifelse(dat_test$player=="Donyell Marshall",1,0),
+            `playerEarl Watson`=ifelse(dat_test$player=="Earl Watson",1,0),
+            `playerFabricio Oberto`=ifelse(dat_test$player=="Fabricio Oberto",1,0),
+            `playerGrant Hill`=ifelse(dat_test$player=="Grant Hill",1,0),
+            `playerHamed Haddadi`=ifelse(dat_test$player=="Hamed Haddadi",1,0),
+            `playerJamaal Magloire`=ifelse(dat_test$player=="Jamaal Magloire",1,0),
+            `playerJameer Nelson`=ifelse(dat_test$player=="Jameer Nelson",1,0),
+            `playerJarrett Jack`=ifelse(dat_test$player=="Jarrett Jack",1,0),
+            `playerJason Collins`=ifelse(dat_test$player=="Jason Collins",1,0),
+            `playerJerryd Bayless`=ifelse(dat_test$player=="Jerryd Bayless",1,0),
+            `playerJohn Salmons`=ifelse(dat_test$player=="John Salmons",1,0),
+            `playerJordan Farmar`=ifelse(dat_test$player=="Jordan Farmar",1,0),
+            `playerKelenna Azubuike`=ifelse(dat_test$player=="Kelenna Azubuike",1,0),
+            `playerKevin Garnett`=ifelse(dat_test$player=="Kevin Garnett",1,0),
+            `playerKevin Ollie`=ifelse(dat_test$player=="Kevin Ollie",1,0),
+            `playerKobe Bryant`=ifelse(dat_test$player=="Kobe Bryant",1,0),
+            `playerKris Humphries`=ifelse(dat_test$player=="Kris Humphries",1,0),
+            `playerKurt Thomas`=ifelse(dat_test$player=="Kurt Thomas",1,0),
+            `playerKyle Lowry`=ifelse(dat_test$player=="Kyle Lowry",1,0),
+            `playerLeBron James`=ifelse(dat_test$player=="LeBron James",1,0),
+            `playerLuis Scola`=ifelse(dat_test$player=="Luis Scola",1,0),
+            `playerMario Chalmers`=ifelse(dat_test$player=="Mario Chalmers",1,0),
+            `playerMarquis Daniels`=ifelse(dat_test$player=="Marquis Daniels",1,0),
+            `playerMichael Beasley`=ifelse(dat_test$player=="Michael Beasley",1,0),
+            `playerMickael Pietrus`=ifelse(dat_test$player=="Mickael Pietrus",1,0),
+            `playerMorris Peterson`=ifelse(dat_test$player=="Morris Peterson",1,0),
+            `playerNick Collison`=ifelse(dat_test$player=="Nick Collison",1,0),
+            `playerOleksiy Pecherov`=ifelse(dat_test$player=="Oleksiy Pecherov",1,0),
+            `playerPau Gasol`=ifelse(dat_test$player=="Pau Gasol",1,0),
+            `playerPeja Stojakovic`=ifelse(dat_test$player=="Peja Stojakovic",1,0),
+            `playerRandy Foye`=ifelse(dat_test$player=="Randy Foye",1,0),
+            `playerRodney Carney`=ifelse(dat_test$player=="Rodney Carney",1,0),
+            `playerRussell Westbrook`=ifelse(dat_test$player=="Russell Westbrook",1,0),
+            `playerRyan Anderson`=ifelse(dat_test$player=="Ryan Anderson",1,0),
+            `playerSergio Rodriguez`=ifelse(dat_test$player=="Sergio Rodriguez",1,0),
+            `playerSun Yue`=ifelse(dat_test$player=="Sun Yue",1,0),
+            `playerTracy McGrady`=ifelse(dat_test$player=="Tracy McGrady",1,0),
+            `playerTroy Murphy`=ifelse(dat_test$player=="Troy Murphy",1,0),
+                      `typealley oop dunk`=ifelse(dat_test$type=="alley oop dunk",1,0),
+                    `typealley oop layup`=ifelse(dat_test$type=="alley oop layup",1,0),
+                      `typedriving bank`=ifelse(dat_test$type=="driving bank",1,0),
+                      `typedriving dunk`=ifelse(dat_test$type=="driving dunk",1,0), `typedriving finger roll layup`=ifelse(dat_test$type=="driving finger roll layup",1,0),
+            `typedriving jump`=ifelse(dat_test$type=="driving jump",1,0),
+            `typedriving layup`=ifelse(dat_test$type=="driving layup",1,0),
+      `typedriving reverse layup`=ifelse(dat_test$type=="driving reverse layup",1,0),
+            `typedriving slam dunk`=ifelse(dat_test$type=="driving slam dunk",1,0),
+            `typedunk`=ifelse(dat_test$type=="dunk",1,0),
+            `typefade away bank`=ifelse(dat_test$type=="fade away bank",1,0),
+            `typefade away jumper`=ifelse(dat_test$type=="fade away jumper",1,0),
+            `typefinger roll layup`=ifelse(dat_test$type=="finger roll layup",1,0),
+            `typefloating jump`=ifelse(dat_test$type=="floating jump",1,0),
+            `typehook bank`=ifelse(dat_test$type=="hook bank",1,0),
+            `typejump`=ifelse(dat_test$type=="jump",1,0),
+            `typejump bank`=ifelse(dat_test$type=="jump bank",1,0),
+            `typelayup`=ifelse(dat_test$type=="layup",1,0),
+            `typejump hook`=ifelse(dat_test$type=="jump hook",1,0),
+            `typepullup jump`=ifelse(dat_test$type=="pullup jump",1,0),
+            `typeputback dunk`=ifelse(dat_test$type=="putback dunk",1,0),
+            `typeputback layup`=ifelse(dat_test$type=="putback layup",1,0),
+            `typeputback slam dunk`=ifelse(dat_test$type=="putback slam dunk",1,0),
+            `typereverse dunk`=ifelse(dat_test$type=="reverse dunk",1,0),
+            `typereverse layup`=ifelse(dat_test$type=="reverse layup",1,0),
+            `typereverse slam dunk`=ifelse(dat_test$type=="reverse slam dunk",1,0),
+            `typerunning bank`=ifelse(dat_test$type=="running bank",1,0),
+            `typerunning dunk`=ifelse(dat_test$type=="running dunk",1,0),
+            `typerunning hook`=ifelse(dat_test$type=="running hook",1,0),
+            `typerunning layup`=ifelse(dat_test$type=="running layup",1,0),
+            `typerunning slam dunk`=ifelse(dat_test$type=="running slam dunk",1,0),
+            `typeslam dunk`=ifelse(dat_test$type=="slam dunk",1,0),
+            `typestep back jump`=ifelse(dat_test$type=="step back jump",1,0),
+            `typeturnaround bank`=ifelse(dat_test$type=="turnaround bank",1,0),
+          `typeturnaround bank hook`=ifelse(dat_test$type=="turnaround bank hook",1,0),
+          `typeturnaround fade away`=ifelse(dat_test$type=="turnaround fade away",1,0),
+            `typeturnaround jump`=ifelse(dat_test$type=="turnaround jump",1,0))
+
+
+data <- dat %>% sample_frac #put rows of dataset in random order
+folds <- ntile(1:nrow(data),n=10) #create fold labels
+
+diags2<-NULL
+for(i in 1:k){
+  train <- data[folds!=i,] #create training set (all but fold i)
+  test <- data[folds==i,] #create test set (just fold i)
+  truth <- test$y_res #save truth labels from fold i
+  
+  fit <- glm(y_res~y+time+period+opponentDEN + opponentPHX  +
+               opponentSAS + teamLAC + teamLAL + teamNJN + teamPOR +
+               `typealley oop dunk` + `typealley oop layup` + `typedriving bank`  
+                + `typedriving dunk` + `typedriving finger roll layup` +
+               `typedriving jump` + `typedriving layup` + `typedriving reverse layup` +
+               `typedriving slam dunk` + typedunk + `typefade away bank` + 
+               `typefade away jumper` + `typefinger roll layup` + `typefloating jump` +
+               `typehook bank` + typejump + `typejump bank`  + 
+               `typejump hook`  + `typepullup jump` + `typeputback dunk` +
+               `typeputback layup` + `typeputback slam dunk` + `typereverse dunk` + 
+               `typereverse layup` + `typereverse slam dunk` + `typerunning bank` +
+               `typerunning dunk` +  `typerunning hook` +
+                `typerunning layup` + `typerunning slam dunk` + 
+               `typeslam dunk` + `typestep back jump` + `typeturnaround bank` + 
+               `typeturnaround bank hook` + `typeturnaround fade away` + 
+                `typeturnaround jump`+typelayup+
+               `playerAndrew Bynum`+ `playerAnthony Carter`+
+               `playerBen Gordon`+ `playerCarl Landry`+`playerCarmelo Anthony`+
+               `playerChuck Hayes`+`playerCraig Smith`+`playerDan Gadzuric`+
+               `playerDikembe Mutombo`+`playerDonyell Marshall`+`playerEarl Watson`+
+               `playerFabricio Oberto`+`playerGrant Hill`+`playerHamed Haddadi`+
+               `playerJamaal Magloire`+`playerJameer Nelson`+`playerJarrett Jack`+
+               `playerJason Collins`+`playerJerryd Bayless`+`playerJohn Salmons`+
+               `playerJordan Farmar`+`playerKelenna Azubuike`+`playerKevin Garnett`+
+               `playerKevin Ollie`+`playerKobe Bryant`+`playerKris Humphries`+
+               `playerKurt Thomas`+`playerKyle Lowry`+`playerLeBron James`+
+               `playerLuis Scola`+
+               `playerMario Chalmers`+`playerMarquis Daniels`+`playerMichael Beasley`+
+               `playerMickael Pietrus`+`playerMorris Peterson`+`playerNick Collison`+
+               `playerOleksiy Pecherov`+`playerPau Gasol`+`playerPeja Stojakovic`+
+               `playerRandy Foye`+`playerRodney Carney`+`playerRussell Westbrook`+
+               `playerRyan Anderson`+`playerSergio Rodriguez`+`playerSun Yue`+
+               `playerTracy McGrady`+`playerTroy Murphy`,data=train,family="binomial")
+  #fit$xlevels[["state"]] <- union(fit$xlevels[["state"]], levels(test$state))
+  #fit$xlevels[["type"]] <- union(fit$xlevels[["type"]], levels(as.factor(test$type)))
+  probs <- predict(fit,newdata=test,type="response")
+  
+  diags2<-rbind(diags,class_diag(probs,truth))
+}
+
+summarize_all(diags2,mean)
+
+```
+
+By using the LASSO'd variables with the 10 fold cross-validated logistical regression, the AUC increased to 0.6659, which has been the highest AUC since the beginning of the question. With 10 fold CV on all the variables the AUC was 0.5892. When just running the model, with no CV or LASSO, the AUC was 0.5285. The model was intially considered "bad" but after using LASSO and 10 fold CV, the model AUC is now considered "poor". In general, they are both considered to not predict made/missed baskets very well, the trade off between false postives and true negatives isn't ideal but LASSO and 10 fold CV do improve the model. 
+
+```{R, echo=F}
+
+sessionInfo()
+Sys.time()
+Sys.info()
+```
+

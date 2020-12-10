@@ -1,0 +1,301 @@
+---
+title: 'Project 1: Exploratory Data Analysis'
+author: "SDS348 - Fall 2020"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output:
+  html_document:
+    toc: yes
+    toc_float:
+      collapsed: no
+      smooth_scroll: yes
+  pdf_document:
+    toc: no
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, eval = TRUE, fig.align = "center", warning = F, message = F,
+tidy=TRUE, tidy.opts=list(width.cutoff=60), R.options=list(max.print=100))
+```
+
+Kapil Mangrolia  
+EID: kvm386
+
+## **Introduction**
+
+The NBA uses various statistics to analyze player's offensive and defensive performance. Using those statistics, predictions can be made on NBA players and how teams will perform in the future. However, what are the algorithms and statistics used to measure this? FiveThirtyEight is a wesbite with NBA data anaylyst that created the following two algorithms for this purpose: "RAPTOR" and "DRAYMOND".  
+
+RAPTOR is a robust algorithm that uses "player tracking" and "on-off" statistics to determine how a player effects their team's offensive and defensive performance. Player tracking are advanced NBA statistics such as speed, distance, placements of shots on the court, etc. On-off statistics measure how a player’s team performed *while* he was on the floor and how the player’s courtmates performed while they were on the floor *without* the player. Some variables that we can expect to see in this dataset are the player name, year, offensive raptor, and defensive raptor.  
+
+DRAYMOND is a defensive rating that accounts for minimizing player openness. DRAYMOND is a +/- minus statistic that is measured per 100 possesions of the basketball, (i.e. a score of 0 means that player was exactly average.) To find the DRAYMOND, the algorithm calculates the "RAW DRAYMOND" with the following equation:  
+
+(Open Shot percentage) - (Open shot percentage - 8) * 100 * (2 or 3 point basket)
+
+The algorithm assumes that if a shot was defended well, it should decrease in made percentage by about 8 percent. The RAW DRAYMOND is then divided by the number of possessions that player was on the floor. That number is adjusted by the number of shots defended based on player position, and is finally subtracted by the value of league average shooting defense per possession from each player's score. Some variables we can expect to see are player name, possessions played, and draymond ratiing. 
+
+Using these datasets, we will attempt to find what players/teams in the league were the best offensively and defensively. Did the defensive RAPTOR and DRAYMOND ratings align? An expected outcome will be that LeBron James and Giannis Antetokounmpo will be highly rated in RAPTOR and DRAYMOND. For RAPTOR, shooters like Stephen Curry are favored, while defensive centers, such as Rudy Gobert, are favored in DRAYMOND. 
+
+## *Tidying: Rearranging Wide/Long*
+
+Draymond and Raptor are both Tidy datasets. However, for the purpose of this course, I will show my ability to use pivot_longer and pivot_wider with a Raptor dataset that involves the postseason and regular season data (raptor.csv).   
+
+In the code block below, I created the variable "raptor1". In raptor1, I used pivot_wider to make the rows in the "season_type" column into two seperate columns based on their contents. Season_type contained the following two acroynms: PS (post-season) and RS (regular season). If want to perform analysis on the PS or RS as *columns*, with pivot_wider, I can do so. Check out some of raptor1 below.
+
+```{r}
+library(tidyverse)
+library(fivethirtyeight)
+draymond <- as.data.frame(nba_draymond)
+raptor<-read.csv(file='raptor.csv')
+
+raptor1 <- raptor %>% pivot_wider(names_from = "season_type", values_from="season")
+
+glimpse(raptor1)
+```
+
+My example for pivot_longer is shown below. I used pivot_longer to make the offensive and defensive "raptor_box", "raptor_on/off", and "predator" columns as row contents and used its columns as stats. Now, I can see each row, it's corresponding value, and the "total" for each category which is in the adjacent column. 
+
+```{r}
+raptor2 <- raptor %>% pivot_longer(cols=c(8:9),names_to="raptor_box",values_to='box_stats')%>%
+  pivot_longer(cols=c(11:12),names_to="raptor_onoff",values_to='onoff_stats') %>%
+  pivot_longer(cols=c(14:15),names_to="raptor",values_to='raptor_stat')
+
+glimpse(raptor2)
+```
+
+From here on, I will use the given tidy data without the postseason/regular season distinction (raptor_set.csv) 
+
+## *Joining/Merging*
+
+```{r}
+
+raptor_set<-read.csv(file='raptor_set.csv')
+
+drayRap <- inner_join(raptor_set,draymond, by=c("player_name"="player","season"="season")) 
+
+```
+
+I joined the datasets with an "inner_join". Inner join takes the intersection of the two datasets and joins them based on a shared column. Both datasets have a column for NBA player names. However, in raptor, the player name column is called "player_name" while in draymond it's called "player". The 2nd half of the line of code equates those two columns and allows you to join datasets when ID names do not match. Draymond and Raptor contain the same number of players and rows. As a result, there were no dropped rows after the join. 
+
+If I used the raptor data that included the distinction between postseason and regular season, there would be many duplicates from the inner join and would require duplicate values from the *columns* to be deleted.  
+
+## *Wrangling*
+
+Using the 6 core dyplr functions, we are able to calculate various statistics. First, let's take the relvent columns from the combined dataset using select(). 
+
+```{r}
+drayRap <- drayRap %>% 
+  select(player_name,season,mp,raptor_offense,raptor_defense,raptor_total,
+         possessions,draymond )
+```
+
+The following 4 statistics are relevent because from 2015-2019 (5 out of the 6 years in the dataset), LeBron James and the Cleveland Cavaliers played against Stephen Curry and the Golden State Warriors in the NBA Finals.   
+
+**While LeBron James was in Cleveland, what was his mean draymond and defensive raptor?**
+
+```{r}
+drayRap %>% filter(player_name == "LeBron James" & season > 2014) %>%
+  summarize(Lebron_draymond = mean(draymond), Lebron_off_raptor = mean(raptor_offense))
+```
+
+LeBron's Draymond seems low and his raptor seems decently high. However, he's currently accepeted as the best player in the world and this was during the peak of his career. Let's see his percentage relative to the dataset.
+
+
+**While LeBron James was in Cleveland, what percentile was he in for draymond and offensive raptor?**
+
+```{r}
+drayRap %>% mutate("percent_dray"=ntile(draymond,100),"percent_off_rap"=ntile(raptor_offense,100)) %>%
+  filter(player_name == "LeBron James" & season > 2014) %>%
+  select(player_name,season,percent_dray,percent_off_rap)
+```
+
+Wow, LeBron was consistenly in the 99th percentile for offense. Additionally, in the only year he won the Finals, 2016, he was in the 84th percentile for defense too!
+
+**What percentile was in Stephen Curry in for draymond and offensive raptor?**
+
+```{r}
+drayRap %>% mutate("percent_dray"=ntile(draymond,100),"percent_off_rap"=ntile(raptor_offense,100)) %>%
+  filter(player_name == "Stephen Curry" & season > 2014) %>%
+  select(player_name,season,percent_dray,percent_off_rap)
+```
+
+Wow, Steph was consistently the best scorer in the league! He also had a great defensive year in 2016, which was his MVP season. No wonder that NBA Finals was the best NBA series in the past decade, arguably. 
+
+
+The following statistcs are about the dataset as a whole (Note, 3000 minutes played indicates that the player is probably a starter in the NBA):  
+
+**For players that have played at least 3000 minutes, what were the mean and standard deviation of the offensive raptor by season?**
+
+```{r}
+drayRap %>%  filter(mp >= 3000) %>% group_by(season) %>%
+  summarize(mean_off_raptor = mean(raptor_offense),sd_off_raptor = sd(raptor_offense))
+```
+
+Makes sense that the mean offensive raptor was high in 2015-2017. The Golden State Warriors went to the Finals on a very offensive playstyle and many other teams attemped to emulate their style. 
+
+
+**For players who have played at least 3000 minutes, who was the best offensive player according to the raptor and in what season?**
+
+```{r}
+drayRap %>% filter(mp >= 3000) %>% group_by(player_name,season) %>% 
+  summarize(good_offense = max(raptor_offense)) %>% arrange(desc(good_offense)) %>% filter(good_offense > 10)
+```
+
+As previously shown with the percentiles, Steph Curry is/has been the best offensive player in the NBA.
+
+
+**For players who have played at least 3000 minutes, who has the best draymond per possession in a season?**
+
+```{r}
+drayRap %>% filter(mp >= 3000) %>% mutate('dray_per_pos' = draymond/possessions) %>%
+  select(player_name,season, dray_per_pos) %>% 
+  arrange(desc(dray_per_pos)) %>% slice(1)
+```
+
+Draymond Green is known to be a key piece for the Golden State Warriors because he is so versatile. Makes sense that the algorithm is named after him. 
+
+
+**For players who have played at least 3000 minutes, who was the worst offensive player and in what season?**
+
+```{r}
+drayRap %>% filter(mp >= 3000) %>% group_by(player_name,season) %>% 
+  summarize(bad_offense = min(raptor_offense)) %>% arrange(bad_offense) %>% filter(bad_offense < -1)
+```
+
+PJ Tucker plays for the Houston Rockets and is encouraged to take open jumpshots, even though he isn't great offensively because the Rockets play an extremely small, fast, and spread style offense. 
+
+
+**For players who have played at least 3000 minutes, between 2014 and 2019, who was the worst defensive player according to draymond and in what season?**
+
+```{r}
+drayRap %>% filter(mp >= 3000) %>% group_by(player_name,season) %>% 
+  summarize(bad_draymond = min(draymond)) %>%
+  arrange(bad_draymond) %>% filter(bad_draymond < -1.5)
+```
+It's not suprising to see a short player like Monta Ellis as the worst defensive player. However, Andrew Wiggins, was the number 1 overall draft pick in 2015. It's really disapointing to see him there. 
+
+**How many different players have played in the NBA between 2014-2019?**
+
+```{r}
+drayRap %>% summarize(total_players = n_distinct(player_name))
+```
+
+Insane to think that there are hundreds of thousands or even millions of basketball players around the world and that only 974 people have played in the NBA between 2014-2019.
+
+
+**For players who have played at least 3000 minutes, who was the most average defensive player according to the draymond?**
+
+```{r}
+drayRap %>% filter(mp >= 3000,draymond <= 0) %>% group_by(player_name,season) %>%
+  summarize(avg_def = min(draymond)) %>% arrange(desc(avg_def)) %>% filter(avg_def <0 & avg_def> -0.02)
+```
+Average for draymond and raptor means that the players rating was closest to 0. Kemba Walker is barely even 6 feet tall so to see him being the most average defender is suprising! 
+
+
+**For players who have played at least 3000 minutes, who was the most average offensive player accorrding to the raptor?**
+
+```{r}
+drayRap %>% filter(mp >= 3000,raptor_offense <= 0) %>% group_by(player_name,season) %>% summarize(avg_off = min(raptor_offense)) %>% arrange(desc(avg_off)) %>% filter(avg_off < 0 & avg_off > -0.3)
+```
+Serge Ibaka is a great defender (he's actually right behind Draymond Green in the draymond per possession) and is considered a decent offensive player. He was key piece for the Toronto Raptors in 2019 when they won the NBA Championship.
+
+**Correlation matrix for the relvent columns**
+
+```{r}
+drayRap %>% select_if(is.numeric) %>% cor()
+```
+
+Interesting correlation between raptor_total and raptor_offense/raptor_defense. About 70% correlation between the two. Obviously, there is about 100% correlation between the minutes played in a season and the number of possessions played. 
+
+
+## *Visualizing*
+
+
+```{r}
+cormat <- drayRap %>% select_if(is.numeric) %>% cor(use="pair")
+
+cormat %>% as.data.frame() %>% rownames_to_column("var1") %>% pivot_longer(-1,'var2', values_to = "Correlation") %>% ggplot(aes(var1,var2,fill=Correlation))+geom_tile() +
+  scale_fill_gradient2(low="red",mid="orangered",high="orange") +#makes colors!
+  geom_text(aes(label=round(Correlation,2)),color = "black", size = 4) + #overlays correlation values
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) + #flips the x-axis labels
+  coord_fixed() +ggtitle("Correlation Heat Map")+ theme(plot.title = element_text(hjust = 0.5),axis.text.x=element_text(angle=45,hjust=1)) + xlab("") +
+  ylab("")
+```
+
+This is a correlation heat map for the combined dataset. As said before, there is a 100% correlation between minutes played and possessions. That makes sense because if a player is in the game frequently, they should be having possession of the ball frequently. Additionally, there is about 70% correlation between the raptor_offense/raptor_defense and raptor_total. That also makes sense because the raptor_total = raptor_defense + raptor_offense. 
+
+```{r}
+drayRap %>% filter(player_name == "Stephen Curry"  | player_name == "Kevin Durant" | player_name == "Draymond Green" | player_name == "Klay Thompson" | player_name == "Andre Iguodala" | player_name == "LeBron James" |
+                     player_name == "Kevin Love" | player_name == "JR Smith"| player_name == "Jeff Green" |
+                     player_name == "George Hill", between(season, 2018,2018)) %>% select(player_name,season,
+draymond, raptor_offense) %>% mutate(team = ifelse(player_name == "Kevin Durant" | player_name == "Stephen Curry" | player_name == "Andre Iguodala" | player_name == "Draymond Green" | player_name == "Klay Thompson", "GSW", "CLE")) -> dray
+    
+ggplot(dray,aes(x=player_name, y=draymond,fill=team)) + geom_bar(stat="summary",fun=mean) +
+  theme(plot.title = element_text(hjust = 0.5),axis.text.x=element_text(angle=45,hjust=1)) + 
+  xlab("Player Name") + ylab("Draymond") +ggtitle("Draymond Ratings For The 2018 NBA Finals Starting Roster") + 
+  scale_fill_manual("Team", values = c("GSW"="blue","CLE"="maroon"))
+```
+
+This is a bar graph for the Draymond defensive rating which compares the starting 5  players for the Cleveland Cavaliers and Golden State Warriors in 2018. These two teams played in the NBA Finals in 2018. Notice how strong the Golden State Warriors are on defense. 4 of their 5 starters are postively rated in Draymond, Draymond Green is the best draymond per possession player in the league, and Stephen Curry is the best offensive player in the NBA as well (refer to previous section for those statements). The Cleveland Cavaliers had 3 of their starting 5 with negative Draymond, meaning they are below average defenders, and their best player, LeBron James, was only an average defender that year. It makes sense that the Cavaliers lost 4-0 to the Warriors in the 2018 NBA Finals. 
+
+
+```{r}
+ggplot(drayRap,aes(x=mp,y=possessions))+geom_point(size=3, aes(color=season)) + scale_color_gradient(low='white', high = 'blue') + ggtitle("Minutes Played vs Possessions") + xlab("Minutes Played") + ylab("Possessions") + theme(plot.title = element_text(hjust = 0.5)) + scale_y_continuous(breaks=seq(0,8100,500))
+```
+
+This is a scatterplot for the total number of minutes played per season vs the total number of possessions per season. In the correlation heat map, this had a 100% correlation. This is visually shown given that the data is very linear. It may seem obvious that players who get to be on the court more often than others should also have possession of the ball more but this scatterplot provides proof that the assumption is valid. 
+
+
+## *Dimensionality Reduction*
+
+To begin a clustering method, scale the numeric variables by converting them to z-scores.
+
+```{r}
+#scale/normalize numeric columns
+library(cluster)
+drayScale <- drayRap %>% mutate_if(is.numeric, scale)
+
+```
+
+Now, I will use PAM clustering to attempt to find trends in the data. How do I know the ideal number of clusters? I will find the silhouette width of the scaled data, which will give the ideal number of clusters for the scaled dataset. 
+
+```{r}
+
+pam_dat <- drayScale %>% select(season,mp,raptor_offense,raptor_defense,raptor_total,possessions,draymond)
+
+sil_width <- vector()
+
+for(i in 2:10){
+  pam_fit <- pam(pam_dat, k=i)
+  sil_width[i] <- pam_fit$silinfo$avg.width
+}
+
+ggplot()+geom_line(aes(x=1:10, y=sil_width))+scale_x_continuous(name='k',breaks=1:10)+
+  ggtitle("Silhouette Width by Number of Clusters") + theme(plot.title = element_text(hjust = 0.5))
+
+```
+
+By the plot above, it seems that 2 clusters should be chosen for this data because the highest point in the plot is at k = 2. Now, PAM clustering can be performed and the results can be plotted.  
+
+```{r}
+pam2 <- pam_dat %>% pam(2) #perform PAM
+
+##ggplot that
+pamclust <- pam_dat %>% mutate(cluster=as.factor(pam2$clustering))
+pamclust %>% ggplot(aes(raptor_offense,draymond,color=cluster)) + geom_point() + 
+  ggtitle("PAM Clustering Plot") + theme(plot.title = element_text(hjust = 0.5)) 
+```
+
+The plot above is a result of PAM clustering. The plot clusters raptor_offense and draymond. It seems that there isn't a large distance between the clusters and there isn't small distance within the clusters either. As a result, this data cluster doesn't have much to offer. If I want to see all possible cluster combinations as plots, I can use ggpairs(). 
+
+```{r}
+#goodness of fit
+#plot(pam2,which=2) #shows a blank plot
+pam2$silinfo$avg.width
+```
+
+The average silhouette width is 0.273 (The plot was blank). According to the goodness of fit criteria, this "structure is weak and could be artificial". I can't control that the goodness of fit was poor because I randomly chose this data for my project. This means that with PAM clustering method, there probably isn't a hidden pattern or group within the data.
+
+```{R, echo=F}
+## DO NOT DELETE THIS BLOCK!
+sessionInfo()
+Sys.time()
+Sys.info()
+```

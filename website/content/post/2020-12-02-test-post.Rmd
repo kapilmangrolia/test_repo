@@ -1,0 +1,23 @@
+---
+title: test post
+author: ''
+date: '2020-12-02'
+slug: test-post
+categories: []
+tags: []
+description: ''
+---
+
+my posts
+
+```{r}
+1+1
+```
+
+
+```{python}
+2+2
+```
+
+![](/post/2020-12-02-test-post_files/cycle1.png)
+
