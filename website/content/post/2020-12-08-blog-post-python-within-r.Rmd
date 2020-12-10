@@ -82,6 +82,12 @@ Hook Em'!
 
 ![](/post/2020-12-08-blog-post-python-within-r_files/deflection2.png)
 
+If your curious, here is the SolidWorks CAD for the DIY home exercise peddling machine. It's designed so that during the pandemic, people can pedal while working from their desk. The mechanism at the top allows for the user to change the resistance on the internal pulleys and belts so the user can get a more intense workout if they want. 
+
+![](/post/2020-12-02-test-post_files/cycle1.png)
+
+
+
 
 
 
